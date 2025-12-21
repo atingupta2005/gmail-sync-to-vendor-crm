@@ -77,6 +77,7 @@ def main():
         res = index.query(
             vector=vector,
             top_k=TOP_K,
+            namespace="emails",
             include_metadata=True,
         )
 
