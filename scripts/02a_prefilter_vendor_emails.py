@@ -114,19 +114,21 @@ def atomic_copy(src: Path, dst: Path) -> None:
 # ---- LOAD REGISTRY ONCE (performance critical) ----
 registry_cache: Dict[str, Dict[str, Any]] = {}
 
-if os.path.exists(registry_path):
-    with open(registry_path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            try:
-                r = json.loads(line)
-                if "email_id" in r:
-                    registry_cache[r["email_id"]] = r
-            except Exception:
-                continue
+
 
 def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_path: Path, config: Dict[str, Any], limit: int = 0, only_prefix: Optional[str] = None, dry_run: bool = False):
     # gather files
 # gather files (mailbox -> shard -> email.json)
+    if os.path.exists(registry_path):
+        with open(registry_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                    if "email_id" in r:
+                        registry_cache[r["email_id"]] = r
+                except Exception:
+                    continue
+
     files: List[Path] = []
 
     for mailbox_dir in input_dir.iterdir():
