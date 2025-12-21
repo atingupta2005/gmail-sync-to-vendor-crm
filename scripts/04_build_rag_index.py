@@ -144,6 +144,13 @@ def embed_email_chunks(
         timeout_seconds=embedding_cfg["timeout_seconds"],
         max_retries=embedding_cfg["max_retries"],
     )
+    print(
+        "EMBED DEBUG:",
+        "chunks =", len(chunks),
+        "raw_vector_type =", type(vectors[0]),
+        "raw_vector_len =", len(vectors[0]),
+    )
+
 
     if len(vectors) != len(chunks):
         raise ValueError("Embedding count does not match chunk count")
@@ -188,6 +195,18 @@ def build_vector_records(
 
     return records
 
+def mean_pool(token_embeddings: list[list[float]]) -> list[float]:
+    """
+    Mean-pool token embeddings into a single vector.
+    """
+    dim = len(token_embeddings[0])
+    pooled = [0.0] * dim
+    for vec in token_embeddings:
+        for i, v in enumerate(vec):
+            pooled[i] += v
+    return [v / len(token_embeddings) for v in pooled]
+
+
 def upsert_vectors(
     *,
     index,
@@ -198,6 +217,12 @@ def upsert_vectors(
     """
     if not records:
         return
+
+    print(
+        "UPSERT DEBUG:",
+        "num_records =", len(records),
+        "vector_dim =", len(records[0]["values"]),
+    )
 
     index.upsert(vectors=records, namespace="emails")
 
