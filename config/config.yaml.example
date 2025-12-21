@@ -23,16 +23,22 @@ output:
 
 state:
   state_dir: "data/state"
-  processing_registry: "data/state/processing_registry.jsonl"
 
 # BERT inference (Step 2B)
 bert:
   endpoint: "https://bert.example/api"
   auth_token: ""
-  model_version: "bert_vendor_v1"
+  model_version: "zeroshot_nli_v1"
+  #model_version: "zeroshot_nli_v1"
   timeout_seconds: 30
   max_retries: 3
   threshold: 0.7
+
+  input:
+    max_total_chars: 6000
+    max_body_chars: 4000
+    signature_max_lines: 12
+    signature_min_signal_hits: 2
 
 # Prefilter scoring (Step 2A)
 prefilter:

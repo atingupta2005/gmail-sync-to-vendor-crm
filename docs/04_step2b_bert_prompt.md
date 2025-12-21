@@ -1,44 +1,51 @@
-# STEP 2B — BERT‑Based Vendor Classification (Core Relevance Decision)
+## 1. Purpose of This Step (Revised)
 
-## 1. Purpose of This Step
+This step produces a **vendor relevance score** for each email that passed STEP 2A.
 
-This step performs the **primary relevance decision**: determining whether an email is truly **vendor‑related**.
+At system start, **no manually labeled training data exists**.
+Therefore, this step **does NOT require a pre-trained vendor classifier**.
 
-Unlike Step 2A (heuristic, high‑recall), this step is **precision‑oriented** and uses a **BERT‑style transformer classifier**.
+Instead, it:
 
-This step is where the email set is reduced from roughly **10–20% → ~1%**.
+* uses a **bootstrappable AI model** (e.g. zero-shot or weakly supervised)
+* produces a **vendor_probability ∈ [0,1]**
+* treats predictions as **proposals**, not ground truth
+* enables **human validation**
+* accumulates labeled data for **future incremental training**
+
+This step remains **mandatory, AI-based, and authoritative for routing**, but **not authoritative for truth**.
 
 ---
 
-## 2. Position in the Pipeline
+## 2. Position in the Pipeline (Unchanged)
 
 ```
 Raw Email JSON (ALL emails)
    ↓
-STEP 2A — Heuristic Pre‑Filter (~10–20%)
+STEP 2A — Heuristic Pre-Filter (~10–20%)
    ↓
-STEP 2B — BERT Classification (~1%)
+STEP 2B — Vendor Relevance Scoring (~1–5%)
    ↓
 Vendor Candidate Emails
 ```
 
-Only emails that pass this step are considered vendor candidates.
+Only emails that pass the configurable threshold continue downstream.
 
 ---
 
-## 3. Core Design Principles
+## 3. Core Design Principles (Revised)
 
-* BERT is the **authoritative relevance judge**
-* Classification is **binary**: vendor vs non‑vendor
-* Model inference is **remote** via HTTP
-* Pipeline machine runs no ML locally
-* All decisions are persisted and explainable
+* AI-first, even without labeled data
+* No manual class creation required
+* Human-in-the-loop by design
+* Fully incremental and re-runnable
+* Model-agnostic via HTTP inference
 
 ---
 
 ## 4. Inputs
 
-* Prefiltered email JSON files from:
+* Prefiltered email JSON files:
 
   ```
   data/emails_prefiltered/
@@ -49,9 +56,9 @@ Only emails that pass this step are considered vendor candidates.
 
 ## 5. Outputs
 
-### 5.1 Vendor Candidate Set
+### 5.1 Vendor Candidate Email Set
 
-Emails classified as vendor‑related are copied or linked to:
+Emails with `vendor_probability >= threshold` are copied or linked to:
 
 ```
 data/emails_candidates/
@@ -59,219 +66,174 @@ data/emails_candidates/
   ├── 01/<email_id>.json
 ```
 
-### 5.2 Classification Log
+---
 
-Append‑only JSONL file:
+### 5.2 Classification Log (Append-Only)
 
 ```
-data/state/step2b_bert_classification.jsonl
+data/state/step2b_vendor_scoring.jsonl
 ```
 
-Each record includes:
+Each record MUST include:
 
-* email_id
-* vendor_probability
-* predicted_label
-* threshold_used
-* model_version
-* timestamp
+```json
+{
+  "email_id": "...",
+  "vendor_probability": 0.72,
+  "predicted_label": "vendor",
+  "threshold_used": 0.6,
+  "model_version": "zeroshot_nli_v1",
+  "timestamp": "..."
+}
+```
+
+⚠️ These values are **not ground truth**.
+
+---
 
 ### 5.3 Registry Update
 
-Update registry with:
+Registry entry MUST record:
 
-* last_completed_step = "step2b_bert"
+* last_completed_step = `"step2b_vendor_scoring"`
+* content_hash
 * bert_model_version
+* inference_timestamp
+* error status (if any)
+
+Human validation **does NOT update the registry**.
 
 ---
 
-## 6. BERT Model Assumptions
+## 6. Model Assumptions (Revised)
 
-### 6.1 Model Type
+### 6.1 Initial Model (No Training Required)
 
-* Transformer encoder (BERT‑family)
-* Binary classification head
-* Examples:
+The initial model MUST support inference without labeled data.
 
-  * bert‑base‑uncased
-  * distilbert‑base‑uncased
-  * MiniLM
+Allowed examples:
 
-The exact model is abstracted behind an API.
+* Zero-shot NLI models (recommended)
+* Weakly supervised transformer classifiers
+* Any remote HTTP-based scoring service
 
----
-
-### 6.2 Training Assumptions (Conceptual)
-
-While training is out of scope for this script, the inference logic must assume:
-
-* Strong class imbalance (~1% positive)
-* Model trained with:
-
-  * class weights or focal loss
-  * balanced validation set
-
-This affects **threshold tuning**.
+The pipeline treats all models identically.
 
 ---
 
-## 7. Input Text Construction (Critical)
+### 6.2 Future Model (Drop-In Replacement)
 
-Raw emails are too long and noisy for BERT.
+Once sufficient human-validated data exists, the model may be replaced with:
 
-The classifier input must be **carefully constructed**.
+* a fine-tuned BERT-family vendor classifier
 
-### 7.1 Text Components
+This change must be **transparent to pipeline logic**.
 
-The input text must include:
+---
 
-1. Subject line
+## 7. Input Text Construction (Still Mandatory)
+
+Classifier input text MUST include:
+
+1. Subject
 2. Sender domain
-3. First N characters or tokens of body
+3. Truncated body (first N tokens)
 4. Signature block (if detected)
 
-Example layout:
-
-```
-[SUBJECT]
-Invoice for Training Program
-
-[FROM_DOMAIN]
-abc‑training.com
-
-[BODY]
-First 300–500 tokens of body text
-
-[SIGNATURE]
-John Doe
-ABC Training
-+91‑XXXXXXXX
-```
+Token safety limits MUST be enforced.
 
 ---
 
-### 7.2 Token Length Safety
+## 8. Thresholding Strategy (Clarified)
 
-* Hard limit enforced (e.g., 512 tokens)
-* Truncate body safely
-* Preserve subject and signature preferentially
+Threshold controls **routing**, not truth.
 
----
-
-## 8. Remote Inference API Contract
-
-The script must support calling a remote inference endpoint.
-
-### 8.1 Request (Example)
-
-```json
-{
-  "text": "<constructed input text>",
-  "model_version": "bert_vendor_v1"
-}
-```
-
-### 8.2 Response (Normalized)
-
-The script must normalize different provider formats into:
-
-```json
-{
-  "vendor_probability": 0.93
-}
-```
-
----
-
-## 9. Thresholding Strategy
-
-Classification decision:
-
-```
-if vendor_probability >= THRESHOLD:
-    vendor = true
-else:
-    vendor = false
-```
-
-### Threshold Characteristics
-
-* Threshold must be configurable
-* Typical range: 0.6 – 0.8
 * Lower threshold → higher recall
 * Higher threshold → higher precision
 
-Threshold tuning happens offline and should not require code changes.
+Threshold MUST be configurable and tunable **without code changes**.
 
 ---
 
-## 10. Incremental Processing Rules
+## 9. Human Validation Loop (Explicit, External)
 
-For each email:
+Human validation is **out-of-band**, not part of inference.
 
-1. Check registry entry
-2. Skip if:
+Validated labels are stored in:
 
-   * last_completed_step >= step2b_bert
-   * content_hash unchanged
-   * bert_model_version unchanged
-3. Re‑run if:
+```
+data/state/human_vendor_labels.jsonl
+```
 
-   * content_hash changed, OR
-   * bert_model_version changed
+Each record:
 
----
+```json
+{
+  "email_id": "...",
+  "human_label": "vendor",
+  "confidence": 0.9,
+  "validated_at": "...",
+  "notes": "Invoice email"
+}
+```
 
-## 11. Error Handling
-
-* API timeouts must be retried
-* Retry count configurable
-* If retries exhausted:
-
-  * log error
-  * mark registry with failure
-  * continue processing other emails
-
-No single failure must stop the batch.
+This file is **append-only** and authoritative for training.
 
 ---
 
-## 12. Configuration Requirements
+## 10. Incremental Training Model (Authoritative)
 
-This step must read from config:
+### 10.1 Training Data Derivation
 
-* bert.endpoint
-* bert.auth_token (if required)
-* bert.model_version
-* bert.timeout_seconds
-* bert.max_retries
-* bert.threshold
+Training data is **derived**, not manually created:
 
-No hard‑coded values.
-
----
-
-## 13. Deliverables
-
-Cursor must generate:
-
-* `02b_bert_vendor_classifier.py`
-* Remote inference client
-* Input text builder
-* Threshold logic
-* Incremental registry integration
-* CLI interface
+```
+JOIN(
+  step2b_vendor_scoring.jsonl,
+  human_vendor_labels.jsonl
+)
+```
 
 ---
 
-## 14. Validation Checklist
+### 10.2 Incremental Training Modes
 
-Before proceeding to Step 3:
+Allowed:
 
-* Vendor candidate rate ~1%
+* Periodic full retraining
+* Continual fine-tuning
+
+Each trained model MUST produce a new `model_version`.
+
+---
+
+### 10.3 Automatic Reprocessing
+
+Changing `bert.model_version` MUST trigger:
+
+* re-scoring in STEP 2B
+* downstream reprocessing
+
+No special flags or manual intervention allowed.
+
+---
+
+## 11. Error Handling (Unchanged)
+
+* API retries required
+* Failures logged
+* Registry updated
+* Batch continues
+
+---
+
+## 12. Validation Checklist (Updated)
+
+Before proceeding to STEP 3:
+
+* Vendor candidate rate ~1–5%
 * False negatives are rare
-* Probabilities look sensible
-* Re‑running script skips unchanged emails
+* Borderline cases are available for validation
+* Re-running skips unchanged emails
 * Changing model_version triggers reprocessing
 
-This step defines relevance quality. Validate carefully.
