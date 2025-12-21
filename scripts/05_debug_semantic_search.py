@@ -35,11 +35,22 @@ def embed_query(text: str) -> List[float]:
 
     data = resp.json()
 
-    # HF router returns token embeddings → mean pool
-    if isinstance(data, list) and isinstance(data[0], list):
-        return mean_pool(data)
+    # Case 1: [[token_vecs]] → mean pool
+    if (
+        isinstance(data, list)
+        and data
+        and isinstance(data[0], list)
+        and data[0]
+        and isinstance(data[0][0], list)
+    ):
+        return mean_pool(data[0])
 
-    raise ValueError(f"Unexpected embedding response: {type(data)}")
+    # Case 2: [vector] already pooled
+    if isinstance(data, list) and data and isinstance(data[0], float):
+        return data
+
+    raise ValueError(f"Unexpected embedding response shape: {type(data)}")
+
 
     pooled = [0.0] * dim
     for token_vec in data:
