@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import List, Dict
 
 
-def chunk_email(cleaned_email: dict) -> list[dict]:
+def chunk_email(cleaned_email: dict) -> List[Dict]:
     """
     Deterministically split a cleaned email into <= 3 chunks.
     Returns a list of {"chunk_index": int, "text": str}
@@ -41,13 +42,13 @@ import requests
 
 
 def embed_texts(
-    texts: list[str],
+    texts: List[str],
     *,
     endpoint: str,
     auth_token: str,
     timeout_seconds: int,
     max_retries: int,
-) -> list[list[float]]:
+) -> List[List[float]]:
     """
     Call remote embedding API and return normalized embeddings.
     Expects provider to return a list of vectors (or equivalent).
@@ -105,7 +106,7 @@ def embed_email_chunks(
     cleaned_email: dict,
     *,
     embedding_cfg: dict,
-) -> list[dict]:
+) -> List[Dict]:
     """
     Chunk a cleaned email and embed each chunk.
     Returns list of dicts:
@@ -148,9 +149,9 @@ def embed_email_chunks(
 def build_vector_records(
     *,
     email_id: str,
-    embedded_chunks: list[dict],
+    embedded_chunks: List[Dict],
     metadata: dict,
-) -> list[dict]:
+) -> List[Dict]:
     """
     Build Pinecone-ready vector records.
     """
@@ -175,7 +176,7 @@ def build_vector_records(
 def upsert_vectors(
     *,
     index,
-    records: list[dict],
+    records: List[Dict],
 ):
     """
     Upsert vector records into Pinecone.
