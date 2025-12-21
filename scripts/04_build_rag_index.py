@@ -376,6 +376,22 @@ import argparse
 import os
 import yaml
 
+import os
+import re
+
+_ENV_RE = re.compile(r"\$\{([^}]+)\}")
+
+def expand_env_vars(obj):
+    if isinstance(obj, dict):
+        return {k: expand_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [expand_env_vars(v) for v in obj]
+    if isinstance(obj, str):
+        def repl(m):
+            return os.environ.get(m.group(1), m.group(0))
+        return _ENV_RE.sub(repl, obj)
+    return obj
+
 
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
@@ -402,7 +418,8 @@ def main():
 
     load_env()
 
-    cfg = load_config(Path(args.config))
+    cfg = expand_env_vars(load_config(Path(args.config)))
+
 
     embedding_cfg = cfg["embedding"]
     pinecone_cfg = embedding_cfg["vector_db"]
