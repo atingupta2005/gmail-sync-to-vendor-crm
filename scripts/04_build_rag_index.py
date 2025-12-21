@@ -361,6 +361,9 @@ def process_all_cleaned_emails(
     return total_vectors
 
 
+from pinecone.core.openapi.shared.exceptions import NotFoundException
+
+
 def delete_email_vectors(
     *,
     index,
@@ -368,9 +371,13 @@ def delete_email_vectors(
 ):
     """
     Delete all vectors for a given email_id.
+    Safe to call even if nothing exists.
     """
-    index.delete(filter={"email_id": email_id})
-
+    try:
+        index.delete(filter={"email_id": email_id})
+    except NotFoundException:
+        # namespace or vectors do not exist yet (first run)
+        pass
 
 
 import argparse
