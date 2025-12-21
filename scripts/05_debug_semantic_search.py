@@ -5,6 +5,8 @@ import requests
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from typing import List
+import json
+from pathlib import Path
 
 # ---------- config ----------
 INDEX_NAME = "vendor-emails"
@@ -12,6 +14,16 @@ EMBED_ENDPOINT = "https://router.huggingface.co/hf-inference/models/BAAI/bge-bas
 TOP_K = 5
 # ----------------------------
 
+def load_cleaned_text(email_id: str) -> str:
+    """
+    Load cleaned_text for an email_id from disk.
+    """
+    path = Path("data/emails_cleaned") / email_id[:2] / f"{email_id}.json"
+    if not path.exists():
+        return "[cleaned text not found]"
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("cleaned_text", "")
 
 def mean_pool(token_embeddings: List[List[float]]) -> List[float]:
     dim = len(token_embeddings[0])
@@ -84,11 +96,20 @@ def main():
         print("\n--- RESULTS ---")
         for match in res["matches"]:
             meta = match.get("metadata", {})
+            email_id = meta.get("email_id")
+
             print(f"\nScore: {match['score']:.4f}")
-            print("Email ID:", meta.get("email_id"))
+            print("Email ID:", email_id)
             print("Chunk:", meta.get("chunk_index"))
             print("Subject:", meta.get("subject"))
             print("Sender domain:", meta.get("sender_domain"))
+
+            if email_id:
+                text = load_cleaned_text(email_id)
+                print("---- MATCHED TEXT (preview) ----")
+                print(text[:500])
+                print("--------------------------------")
+
         print("----------------\n")
 
 
