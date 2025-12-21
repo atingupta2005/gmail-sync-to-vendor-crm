@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 from datetime import datetime
 from typing import List, Dict
+import os
 
 from functools import wraps
 from time import perf_counter
@@ -65,9 +66,9 @@ def chunk_email(cleaned_email: dict) -> List[Dict]:
 import time
 import requests
 
-@debug_step(
-    "embed_texts"
-)
+_SESSION = requests.Session()
+
+@debug_step("embed_texts")
 def embed_texts(
     texts: List[str],
     *,
@@ -76,10 +77,6 @@ def embed_texts(
     timeout_seconds: int,
     max_retries: int,
 ) -> List[List[float]]:
-    """
-    Call remote embedding API and return normalized embeddings.
-    Expects provider to return a list of vectors (or equivalent).
-    """
     headers = {
         "Authorization": f"Bearer {auth_token}",
         "Content-Type": "application/json",
@@ -87,12 +84,11 @@ def embed_texts(
 
     payload = {"inputs": texts}
 
-    last_err = None
     for attempt in range(1, max_retries + 1):
         try:
             print("CALLING EMBEDDING API WITH", len(texts), "TEXTS")
 
-            resp = requests.post(
+            resp = _SESSION.post(
                 endpoint,
                 headers=headers,
                 json=payload,
@@ -101,43 +97,23 @@ def embed_texts(
             resp.raise_for_status()
             data = resp.json()
 
-            # data can be:
-            # 1) List[List[float]]              -> already pooled
-            # 2) List[List[List[float]]]        -> token embeddings
-
             vectors = []
-
             for item in data:
-                # Case 1: already pooled vector
-                if isinstance(item, list) and item and isinstance(item[0], (int, float)):
+                if isinstance(item[0], (int, float)):
                     vectors.append(item)
-                    continue
-
-                # Case 2: token embeddings -> mean pool
-                if isinstance(item, list) and item and isinstance(item[0], list):
+                else:
                     dim = len(item[0])
                     pooled = [0.0] * dim
                     for token_vec in item:
                         for i, v in enumerate(token_vec):
                             pooled[i] += v
-                    pooled = [v / len(item) for v in pooled]
-                    vectors.append(pooled)
-                    continue
-
-                raise ValueError(f"Unsupported embedding item format: {type(item)}")
+                    vectors.append([v / len(item) for v in pooled])
 
             return vectors
 
-
-
-
-            raise ValueError(f"Unexpected embedding response format: {type(data)}")
-
-        except Exception as e:
-            print("🔥 EMBED ERROR:", repr(e))
-            print("🔥 RAW RESPONSE TYPE:", type(data) if 'data' in locals() else None)
-            print("🔥 RAW RESPONSE VALUE:", data if 'data' in locals() else None)
-            raise
+        except Exception:
+            if attempt == max_retries:
+                raise
 
 
 from pinecone import Pinecone
@@ -170,8 +146,6 @@ def embed_email_chunks(
         "embedding": List[float],
       }
     """
-    if not embedding_cfg.get("auth_token"):
-        raise RuntimeError("embedding.auth_token is missing")
 
     chunks = chunk_email(cleaned_email)
     if not chunks:
@@ -182,18 +156,14 @@ def embed_email_chunks(
     vectors = embed_texts(
         texts,
         endpoint=embedding_cfg["endpoint"],
-        auth_token=os.environ["HF_TOKEN"],
+        auth_token=embedding_cfg["auth_token"],
         timeout_seconds=embedding_cfg["timeout_seconds"],
         max_retries=embedding_cfg["max_retries"],
     )
-    print(
-        "EMBED DEBUG:",
-        "chunks =", len(chunks),
-        "raw_vector_type =", type(vectors[0]),
-        "raw_vector_len =", len(vectors[0]),
-    )
 
-
+    if not vectors:
+        raise ValueError("Empty embedding response")
+    
     if len(vectors) != len(chunks):
         raise ValueError("Embedding count does not match chunk count")
 
@@ -237,40 +207,38 @@ def build_vector_records(
 
     return records
 
-@debug_step("upsert_vectors")
 def upsert_vectors(
     *,
     index,
     records: List[Dict],
+    buffer: List[Dict],
+    batch_size: int = 500,
 ):
     """
-    Upsert vector records into Pinecone.
+    Buffer vectors and upsert in large batches.
     """
     if not records:
         return
 
-    print(
-        "UPSERT DEBUG:",
-        "num_records =", len(records),
-        "vector_dim =", len(records[0]["values"]),
-    )
+    buffer.extend(records)
 
-    index.upsert(vectors=records, namespace="emails")
+    if len(buffer) >= batch_size:
+        print("UPSERT FLUSH:", len(buffer))
+        index.upsert(vectors=buffer, namespace="emails")
+        buffer.clear()
 
-
-@debug_step(
-    "process_single_cleaned_email"
-)
+@debug_step("process_single_cleaned_email")
 def process_single_cleaned_email(
     *,
     cleaned_email: dict,
     embedding_cfg: dict,
     pinecone_index,
     base_metadata: dict,
+    upsert_buffer: List[Dict],
 ):
     """
     End-to-end processing for a single cleaned email:
-    chunk -> embed -> build vectors -> upsert.
+    chunk -> embed -> build vectors -> buffered upsert.
     """
     email_id = cleaned_email["email_id"]
 
@@ -278,7 +246,6 @@ def process_single_cleaned_email(
         cleaned_email,
         embedding_cfg=embedding_cfg,
     )
-    print("CHUNKS:", len(embedded_chunks))
 
     if not embedded_chunks:
         return 0
@@ -292,9 +259,11 @@ def process_single_cleaned_email(
     upsert_vectors(
         index=pinecone_index,
         records=records,
+        buffer=upsert_buffer,
     )
 
     return len(records)
+
 
 
 import json
@@ -375,6 +344,8 @@ def process_all_cleaned_emails(
     pinecone_index,
     registry_path: Path,
 ):
+    upsert_buffer = []
+
     registry = load_registry(registry_path)
     total_vectors = 0
 
@@ -394,11 +365,7 @@ def process_all_cleaned_emails(
         ):
             continue  # safe skip
 
-        if reg:
-            delete_email_vectors(
-                index=pinecone_index,
-                email_id=email_id,
-            )
+        # No delete needed — upsert overwrites by ID
 
         base_metadata = derive_base_metadata(cleaned_email)
 
@@ -408,6 +375,7 @@ def process_all_cleaned_emails(
                 embedding_cfg=embedding_cfg,
                 pinecone_index=pinecone_index,
                 base_metadata=base_metadata,
+                upsert_buffer=upsert_buffer,
             )
 
             append_registry(
@@ -434,6 +402,11 @@ def process_all_cleaned_emails(
             )
             continue
 
+    if upsert_buffer:
+        print("FINAL UPSERT FLUSH:", len(upsert_buffer))
+        pinecone_index.upsert(vectors=upsert_buffer, namespace="emails")
+        upsert_buffer.clear()
+
     return total_vectors
 
 
@@ -446,14 +419,11 @@ def delete_email_vectors(
     email_id: str,
 ):
     """
-    Delete all vectors for a given email_id.
-    Safe to call even if nothing exists.
+    No-op.
+    Deleting before upsert is unnecessary because
+    upsert with deterministic IDs overwrites existing vectors.
     """
-    try:
-        index.delete(filter={"email_id": email_id}, namespace="emails")
-    except NotFoundException:
-        # namespace or vectors do not exist yet (first run)
-        pass
+    return
 
 
 import argparse

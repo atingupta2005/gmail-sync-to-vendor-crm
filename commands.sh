@@ -1,7 +1,18 @@
 # Terminal 1
-nohup ~/run_mbsync_retry.sh > /dev/null 2>&1 &
+cd ~/gmail-sync-to-vendor-crm/
+git pull
+source venv/bin/activate
+
+chmod +x scripts/00_run_mbsync_retry.sh
+
+nohup scripts/00_run_mbsync_retry.sh > /dev/null 2>&1 &
 pgrep mbsync
 tail -f ~/mbsync.log
+
+## Stop (Only if needed)
+# pkill -f run_mbsync_retry
+# pgrep mbsync
+
 
 # Terminal 2
 cd ~/gmail-sync-to-vendor-crm
