@@ -1,22 +1,22 @@
-# STEP 3 — Cleanup & Reduction of Vendor Candidate Emails
+# STEP 3 — Cleanup & Reduction (Contact-Preserving)
 
-## 1. Purpose of This Step
+## 1. Purpose of This Step (Revised)
 
-This step **reduces noise and size** of emails that have already been classified as vendor‑related.
+This step **reduces noise while preserving all identity and contact evidence** from vendor-candidate emails.
 
 By this point:
 
 * Relevance has already been decided (Step 2B)
 * Volume is low (~1% of total emails)
 
-The goal here is to:
+The goal is to:
 
-* Remove irrelevant text (quoted replies, forwards, boilerplate)
-* Extract a clean, human‑authored message
-* Extract the signature block
-* Prepare text for **embeddings and LLM reasoning**
+* Remove redundant conversation history (quoted replies, forwarded chains)
+* Remove non-semantic noise (HTML junk, MIME artifacts)
+* Normalize text for embeddings and LLM reasoning
+* **Preserve every possible vendor identification signal**
 
-This step directly impacts **embedding quality, RAG relevance, and LLM accuracy**.
+This step **must not remove any information that could identify, contact, or attribute a vendor**.
 
 ---
 
@@ -25,105 +25,91 @@ This step directly impacts **embedding quality, RAG relevance, and LLM accuracy*
 ```
 STEP 2B — BERT Classification (vendor candidates)
    ↓
-STEP 3 — Cleanup & Reduction
+STEP 3 — Cleanup & Reduction (CONTACT-PRESERVING)
    ↓
 Cleaned Vendor Emails
 ```
 
-Only emails that passed Step 2B are processed here.
-
 ---
 
-## 3. Core Design Principles
+## 3. Core Design Principles (Authoritative)
 
-* Deterministic rules only (no AI)
-* Aggressive reduction, but preserve meaning
-* Never alter factual content
-* Always preserve:
-
-  * subject
-  * sender information
-  * core message
+* Deterministic rules only (NO AI)
+* Aggressive removal of *conversation noise*
+* **Zero tolerance for loss of contact details**
+* Evidence preservation over readability
 * Incremental and idempotent
 
 ---
 
-## 4. Inputs
+## 4. Absolute Preservation Rules (CRITICAL)
 
-* Vendor candidate email JSON files from:
+The following **MUST ALWAYS be preserved**:
 
-  ```
-  data/emails_candidates/
-  ```
-* Processing registry
+### 4.1 Header Metadata (Never Clean)
 
----
+These fields are **out of scope for cleanup** and must always be retained verbatim:
 
-## 5. Outputs
+* `from`
+* `to`
+* `cc`
+* `bcc`
+* `reply_to`
+* `subject`
+* `date`
+* `message_id`
 
-### 5.1 Cleaned Email JSON Files
-
-Written to:
-
-```
-data/emails_cleaned/
-  ├── 00/<email_id>.json
-  ├── 01/<email_id>.json
-```
-
-Each output JSON must include both original and cleaned representations.
-
-### 5.2 Cleanup Statistics Log
-
-Append‑only JSONL file:
-
-```
-data/state/step3_cleanup_stats.jsonl
-```
-
-Each record must include:
-
-* email_id
-* raw_length
-* cleaned_length
-* reduction_ratio
-* timestamp
-
-### 5.3 Registry Update
-
-Update registry with:
-
-* last_completed_step = "step3_cleanup"
+Cleanup logic **must never infer or remove headers from the body**.
 
 ---
 
-## 6. Cleanup Operations (In Order)
+### 4.2 Contact & Identity Signals (Never Remove)
 
-Cleanup must be applied in a **fixed order** to ensure consistency.
+Cleanup logic **must not delete** any line containing:
+
+* Email addresses
+* Phone numbers (mobile, landline, international formats)
+* Personal names
+* Job titles
+* Company names
+* Physical addresses
+* URLs (LinkedIn, company sites, calendars)
+* Messaging handles (WhatsApp, Telegram, etc.)
+
+If a line plausibly contains contact or identity information, **it must be preserved**, even if it appears inside:
+
+* signatures
+* disclaimers
+* footers
 
 ---
 
-## 7. Remove Quoted Replies
+## 5. Allowed Cleanup Operations (Strictly Scoped)
 
-Quoted replies add large amounts of redundant text.
+Cleanup operations MUST be applied **in order**, and MUST respect preservation rules.
 
-### Common patterns to detect
+---
+
+## 6. Remove Quoted Replies (Conversation History Only)
+
+### Detect quoted replies via:
 
 * Lines starting with `>`
 * Blocks starting with:
 
   * `On <date>, <person> wrote:`
-  * `From:` / `Sent:` / `To:` / `Subject:` blocks
+  * Full RFC-822 reply headers **only when part of a reply chain**
 
 ### Rule
 
-* Once a quoted‑reply marker is detected, drop everything **below** it.
+* Once a quoted-reply marker is detected, drop everything **below it**
+* **Do NOT remove inline headers unless clearly part of a quoted reply**
 
 ---
 
-## 8. Remove Forwarded Message Blocks
+## 7. Remove Forwarded Message Chains
 
-### Common markers
+### Detect via markers:
 
 * `----- Forwarded message -----`
 * `Begin forwarded message:`
@@ -131,102 +117,113 @@ Quoted replies add large amounts of redundant text.
 ### Rule
 
 * Remove forwarded blocks entirely
-* Preserve only the latest authored message
+* Preserve only the most recent authored message
 
 ---
 
-## 9. Remove Base64 / Attachment Artifacts
+## 8. Remove MIME / Base64 / Attachment Artifacts
 
-Some emails contain base64 remnants or inline encoded content.
-
-### Detection heuristics
+### Detect via heuristics:
 
 * Very long lines with no spaces
-* Base64 character sets
-* MIME boundary artifacts
+* Base64-only character runs
+* MIME boundary markers
 
 ### Rule
 
-* Remove such blocks completely
+* Remove these blocks completely
+* Ensure no human-authored text is removed
 
 ---
 
-## 10. Remove Boilerplate & Disclaimers
+## 9. Boilerplate & Disclaimers (Constrained)
 
-### Examples
+### Important Constraint
 
-* Corporate confidentiality disclaimers
-* Virus scan footers
-* Long legal notices
+Disclaimers **often contain contact or legal identity data**.
 
 ### Rule
 
-* Remove known boilerplate patterns via regex list
-* Configurable patterns preferred
+* Disclaimers MAY be trimmed **only if**:
+
+  * They occur **after the signature block**
+  * AND they contain **no contact or identity signals**
+* Otherwise, disclaimers MUST be preserved
 
 ---
 
-## 11. Normalize Whitespace
+## 10. Signature Handling (Extract, Never Delete)
 
-After removals:
+### Signature Definition
 
-* Collapse multiple blank lines
-* Normalize line endings
-* Strip leading/trailing whitespace
-
----
-
-## 12. Signature Extraction (Critical)
-
-The signature often contains:
-
-* vendor name
-* organization
-* phone numbers
-* email addresses
-
-### Common signature delimiters
-
-* `--`
-* `Thanks,`
-* `Regards,`
-* `Best regards,`
-* `Sincerely,`
+A signature is **valuable structured data**, not noise.
 
 ### Strategy
 
-* Detect signature delimiter from bottom up
+* Detect signature delimiter from bottom up:
+
+  * `--`
+  * `Thanks,`
+  * `Regards,`
+  * `Best regards,`
+  * `Sincerely,`
+
+### Rule
+
 * Split message into:
 
-  * main body
-  * signature block
-
-If no delimiter found:
-
-* leave signature empty
+  * `cleaned_body_text`
+  * `signature_text`
+* **Never discard the signature**
+* Preserve phone numbers, emails, names, titles, and companies
 
 ---
 
-## 13. Length & Token Control
+## 11. Whitespace Normalization (Safe Only)
 
-### Why this matters
+Allowed:
 
-* Embeddings and LLMs have token limits
-* Shorter text = better signal
+* Collapse excessive blank lines
+* Normalize line endings
+* Trim trailing whitespace
 
-### Rules
+Not allowed:
 
-* Enforce max cleaned length (configurable, e.g. 2–4k chars)
-* Truncate from bottom if needed
-* Preserve subject and top of body preferentially
+* Line-level deletion that could remove contact info
 
 ---
 
-## 14. Output JSON Schema Additions
+## 12. Length & Token Control (Non-Destructive)
 
-The cleaned JSON must include:
+### Purpose
 
-```
+* Control embedding and LLM token limits
+
+### Rule
+
+* Enforce max cleaned length (configurable)
+* Truncate **from the bottom of the body only**
+* **Never truncate signature**
+* Prefer preserving:
+
+  1. Subject
+  2. Top of body
+  3. Entire signature
+
+---
+
+## 13. Output JSON Requirements (Updated)
+
+The cleaned email JSON MUST include:
+
+```yaml
+headers:
+  from
+  to
+  cc
+  subject
+  date
+
 body:
   raw_text
   cleaned_text
@@ -236,67 +233,54 @@ cleanup_stats:
   raw_length
   cleaned_length
   reduction_ratio
+  preserved_contact_tokens: true
 ```
 
-Original raw_text must never be removed.
-
 ---
 
-## 15. Incremental Processing Rules
+## 14. Incremental Processing Rules
 
-For each email:
+Same as before:
 
 1. Check registry
-2. Skip if:
-
-   * last_completed_step >= step3_cleanup
-   * content_hash unchanged
-3. Re‑run if content changed
+2. Skip if unchanged and already processed
+3. Reprocess only on content change
 
 ---
 
-## 16. Error Handling
+## 15. Error Handling (Fail-Open)
 
-* Any cleanup failure must be logged
-* Email should still be written with:
+If cleanup fails:
 
-  * cleaned_text = raw_text
-  * cleanup_stats indicating failure
-* Processing must continue
-
----
-
-## 17. Configuration Requirements
-
-This step must read from config:
-
-* quoted‑reply patterns
-* forwarded message patterns
-* boilerplate patterns
-* signature delimiters
-* max_cleaned_length
+* Preserve raw text
+* Preserve headers
+* Preserve signature
+* Log error
+* Continue processing
 
 ---
 
-## 18. Deliverables
+## 16. Validation Checklist (Mandatory Before Step 4)
 
-Cursor must generate:
-
-* `03_cleanup_candidate_emails.py`
-* Deterministic cleanup pipeline
-* Incremental registry integration
-* CLI interface
+* No email loses phone numbers or email addresses
+* Signatures are extracted, not deleted
+* Headers are intact
+* Cleaned text is shorter but semantically richer
+* Re-runs do not alter unchanged emails
 
 ---
 
-## 19. Validation Checklist
+## 17. Guiding Principle (Final)
 
-Before proceeding to Step 4:
+> **If a human could use the cleaned email to contact the vendor, Step 3 succeeded.
+> If not, Step 3 failed.**
 
-* Cleaned text significantly shorter than raw
-* No quoted chains remain
-* Signature extracted when present
-* Re‑running script skips unchanged emails
-* Cleanup stats look reasonable
+---
 
-This step determines downstream AI quality. Validate carefully.
+If you want, next I can:
+
+* rewrite your cleanup functions to be **contact-aware**
+* give you **regex guards for phone/email preservation**
+* or provide a **minimal diff against your current code**
+
+Just say the word.

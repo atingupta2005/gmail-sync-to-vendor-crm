@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-STEP 3 — Cleanup & Reduction
+STEP 3 — Cleanup & Reduction (Contact-Preserving)
 
-Cleans vendor-candidate emails to remove noise (quoted replies, signatures,
-disclaimers, HTML junk) and produce high-signal text for downstream AI steps.
+Removes conversation noise while preserving ALL vendor identity
+and contact information.
 
 NO AI usage. Deterministic only.
 """
@@ -14,10 +14,9 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Tuple
 
 LOG = logging.getLogger("step3_cleanup")
-
 
 # -------------------------
 # Utility helpers
@@ -34,25 +33,48 @@ def shard_path(base: Path, email_id: str) -> Path:
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
+# -------------------------
+# Contact detection (CRITICAL)
+# -------------------------
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+PHONE_RE = re.compile(r"""
+    (?:
+        \+?\d{1,3}[\s.-]?
+    )?
+    (?:\(?\d{2,4}\)?[\s.-]?)?
+    \d{3,4}[\s.-]?\d{3,4}
+""", re.VERBOSE)
+
+URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
+
+def contains_contact_info(text: str) -> bool:
+    return bool(
+        EMAIL_RE.search(text)
+        or PHONE_RE.search(text)
+        or URL_RE.search(text)
+    )
 
 # -------------------------
 # Cleanup logic
 # -------------------------
 
-QUOTED_PATTERNS = [
+QUOTED_REPLY_PATTERNS = [
     re.compile(r"^>+", re.MULTILINE),
     re.compile(r"^On .* wrote:$", re.MULTILINE),
-    re.compile(r"^From: .*", re.MULTILINE),
-    re.compile(r"^Sent: .*", re.MULTILINE),
-    re.compile(r"^To: .*", re.MULTILINE),
-    re.compile(r"^Subject: .*", re.MULTILINE),
 ]
 
-SIGNATURE_SPLIT_PATTERNS = [
+FORWARDED_MARKERS = [
+    re.compile(r"^-{2,}\s*Forwarded message\s*-{2,}", re.IGNORECASE),
+    re.compile(r"^Begin forwarded message:", re.IGNORECASE),
+]
+
+SIGNATURE_DELIMITERS = [
     re.compile(r"^--\s*$", re.MULTILINE),
     re.compile(r"^Regards,?$", re.MULTILINE | re.IGNORECASE),
     re.compile(r"^Thanks,?$", re.MULTILINE | re.IGNORECASE),
     re.compile(r"^Best regards,?$", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^Sincerely,?$", re.MULTILINE | re.IGNORECASE),
 ]
 
 DISCLAIMER_KEYWORDS = [
@@ -62,30 +84,46 @@ DISCLAIMER_KEYWORDS = [
     "legal disclaimer",
 ]
 
+# -------------------------
+# Cleanup operations
+# -------------------------
 
-def remove_quoted_blocks(text: str) -> (str, bool):
+def remove_quoted_and_forwarded(text: str) -> Tuple[str, bool]:
     original = text
-    for pat in QUOTED_PATTERNS:
-        text = pat.split(text)[0]
+
+    for pat in FORWARDED_MARKERS + QUOTED_REPLY_PATTERNS:
+        split = pat.split(text, maxsplit=1)
+        if len(split) > 1:
+            text = split[0]
+
     return text.strip(), text != original
 
 
-def remove_signature(text: str) -> (str, bool):
-    original = text
-    for pat in SIGNATURE_SPLIT_PATTERNS:
+def split_signature(text: str) -> Tuple[str, str, bool]:
+    """
+    Extract signature WITHOUT deleting it.
+    """
+    for pat in SIGNATURE_DELIMITERS:
         parts = pat.split(text, maxsplit=1)
         if len(parts) > 1:
-            text = parts[0]
-            break
-    return text.strip(), text != original
+            body = parts[0].strip()
+            signature = parts[1].strip()
+            return body, signature, True
+
+    return text.strip(), "", False
 
 
-def remove_disclaimer(text: str) -> (str, bool):
+def remove_disclaimer_safely(text: str) -> Tuple[str, bool]:
+    """
+    Remove disclaimer ONLY if it contains no contact info.
+    """
     lower = text.lower()
     for kw in DISCLAIMER_KEYWORDS:
         idx = lower.find(kw)
         if idx != -1:
-            return text[:idx].strip(), True
+            tail = text[idx:]
+            if not contains_contact_info(tail):
+                return text[:idx].strip(), True
     return text, False
 
 
@@ -95,44 +133,52 @@ def normalize_whitespace(text: str) -> str:
     return text.strip()
 
 
-def cleanup_text(raw_text: str) -> Dict[str, Any]:
-    meta = {
-        "removed_quoted_blocks": False,
-        "removed_signature": False,
-        "removed_disclaimer": False,
-    }
-
-    text = raw_text or ""
-
-    text, changed = remove_quoted_blocks(text)
-    meta["removed_quoted_blocks"] = changed
-
-    text, changed = remove_signature(text)
-    meta["removed_signature"] = changed
-
-    text, changed = remove_disclaimer(text)
-    meta["removed_disclaimer"] = changed
-
-    text = normalize_whitespace(text)
-
-    return {
-        "cleaned_text": text,
-        "meta": meta,
-    }
-
-
-def truncate_text(text: str, max_chars: int = 2000) -> str:
-    if len(text) <= max_chars:
-        return text
-    cut = text[:max_chars]
+def truncate_body_only(body: str, max_chars: int = 2000) -> str:
+    if len(body) <= max_chars:
+        return body
+    cut = body[:max_chars]
     last_period = cut.rfind(".")
     if last_period > 200:
         return cut[: last_period + 1]
     return cut
 
 
+def cleanup_text(raw_text: str) -> Dict[str, Any]:
+    meta = {
+        "removed_quoted_blocks": False,
+        "removed_disclaimer": False,
+        "signature_extracted": False,
+        "contact_preserved": True,
+    }
+
+    text = raw_text or ""
+
+    text, changed = remove_quoted_and_forwarded(text)
+    meta["removed_quoted_blocks"] = changed
+
+    body, signature, changed = split_signature(text)
+    meta["signature_extracted"] = changed
+
+    body, changed = remove_disclaimer_safely(body)
+    meta["removed_disclaimer"] = changed
+
+    body = normalize_whitespace(body)
+    signature = normalize_whitespace(signature)
+
+    body = truncate_body_only(body)
+
+    cleaned = body
+    if signature:
+        cleaned = f"{body}\n\n--- SIGNATURE ---\n{signature}"
+
+    return {
+        "cleaned_text": cleaned,
+        "signature_text": signature,
+        "meta": meta,
+    }
+
 # -------------------------
-# Registry handling
+# Registry handling (unchanged)
 # -------------------------
 
 def load_registry(registry_path: Path) -> Dict[str, Dict[str, Any]]:
@@ -152,7 +198,6 @@ def load_registry(registry_path: Path) -> Dict[str, Dict[str, Any]]:
 def append_registry(registry_path: Path, record: Dict[str, Any]) -> None:
     with registry_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
 
 # -------------------------
 # Main
@@ -193,25 +238,24 @@ def main() -> int:
                 skipped += 1
                 continue
 
-            body = email.get("body", {})
-            raw_text = body.get("raw_text") or ""
+            raw_text = email.get("body", {}).get("raw_text") or ""
 
             cleanup = cleanup_text(raw_text)
-            cleaned_text = truncate_text(cleanup["cleaned_text"])
 
             output = {
                 "email_id": email_id,
                 "content_hash": content_hash,
                 "source_email_path": str(json_path),
-                "cleaned_text": cleaned_text,
+                "cleaned_text": cleanup["cleaned_text"],
+                "signature_text": cleanup["signature_text"],
                 "cleanup_meta": {
                     "original_length": len(raw_text),
-                    "cleaned_length": len(cleaned_text),
+                    "cleaned_length": len(cleanup["cleaned_text"]),
                     **cleanup["meta"],
                 },
                 "processing": {
                     "cleaned_at": utc_now(),
-                    "schema_version": 1,
+                    "schema_version": 2,
                 },
             }
 
