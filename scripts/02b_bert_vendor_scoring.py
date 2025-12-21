@@ -69,7 +69,7 @@ class Step2BConfig:
         # no auth
         self.auth_token = str(get_nested(cfg, ["bert", "auth_token"], "")).strip() or None
         
-        LOG.info("HF auth token present: %s", bool(cfg.auth_token))
+        LOG.info("HF auth token present: %s", bool(self.auth_token))
 
         self.model_version = str(get_nested(cfg, ["bert", "model_version"], "")).strip()
         if not self.model_version:
