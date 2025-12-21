@@ -67,7 +67,9 @@ class Step2BConfig:
             raise ValueError("config: bert.endpoint missing")
 
         # no auth
-        self.auth_token = None
+        self.auth_token = str(get_nested(cfg, ["bert", "auth_token"], "")).strip() or None
+        
+        LOG.info("HF auth token present: %s", bool(cfg.auth_token))
 
         self.model_version = str(get_nested(cfg, ["bert", "model_version"], "")).strip()
         if not self.model_version:
