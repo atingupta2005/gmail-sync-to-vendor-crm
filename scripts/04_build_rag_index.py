@@ -64,6 +64,8 @@ def embed_texts(
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
+            print("CALLING EMBEDDING API WITH", len(texts), "TEXTS")
+
             resp = requests.post(
                 endpoint,
                 headers=headers,
@@ -72,6 +74,7 @@ def embed_texts(
             )
             resp.raise_for_status()
             data = resp.json()
+            print("EMBEDDINGS RECEIVED:", len(data))
 
             # HF feature-extraction typically returns: List[List[float]]
             if isinstance(data, list) and data and isinstance(data[0], list):
@@ -117,6 +120,9 @@ def embed_email_chunks(
         "embedding": List[float],
       }
     """
+    if not embedding_cfg.get("auth_token"):
+        raise RuntimeError("embedding.auth_token is missing")
+
     chunks = chunk_email(cleaned_email)
     if not chunks:
         return []
@@ -205,6 +211,7 @@ def process_single_cleaned_email(
         cleaned_email,
         embedding_cfg=embedding_cfg,
     )
+    print("CHUNKS:", len(embedded_chunks))
 
     if not embedded_chunks:
         return 0
@@ -305,6 +312,8 @@ def process_all_cleaned_emails(
     total_vectors = 0
 
     for path, cleaned_email in iter_cleaned_emails(cleaned_dir):
+        print("FOUND CLEANED EMAIL:", path)
+
         email_id = cleaned_email["email_id"]
         content_hash = cleaned_email.get("content_hash")
         model_version = embedding_cfg["model_version"]
@@ -417,7 +426,9 @@ def main():
     cfg = expand_env_vars(load_config(Path(args.config)))
 
 
-    embedding_cfg = cfg["embedding"]
+    embedding_cfg = dict(cfg["embedding"])
+    embedding_cfg["auth_token"] = os.environ["HF_TOKEN"]
+    
     pinecone_cfg = embedding_cfg["vector_db"]
 
     index = init_pinecone_index(
