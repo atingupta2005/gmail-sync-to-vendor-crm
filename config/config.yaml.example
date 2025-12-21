@@ -27,7 +27,6 @@ state:
 # BERT inference (Step 2B)
 bert:
   endpoint: "https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli"
-  auth_token: "${HF_TOKEN}"
   model_version: "zeroshot_mnli_v1"
   timeout_seconds: 60
   max_retries: 3
@@ -212,22 +211,17 @@ prefilter:
 
 embedding:
   endpoint: "https://api-inference.huggingface.co/pipeline/feature-extraction/BAAI/bge-base-en-v1.5"
-  auth_token: "${HF_TOKEN}"
   model_version: "bge_base_v1"
   timeout_seconds: 30
   max_retries: 3
 
   vector_db:
     type: "pinecone"
-    api_key: "${PINECONE_API_KEY}"
-    environment: "${PINECONE_ENVIRONMENT}"
     index_name: "vendor-emails"
     dimension: 768
 
 # LLM (Step 5 & 6)
 llm:
-  endpoint: "${LLM_ENDPOINT}"
-  auth_token: "${LLM_AUTH_TOKEN}"
   model_version: "llm_vendor_extract_v1"
   timeout_seconds: 60
   max_retries: 3

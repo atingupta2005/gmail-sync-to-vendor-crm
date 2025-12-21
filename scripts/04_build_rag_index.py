@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 from datetime import datetime
 from typing import List, Dict
 
@@ -125,7 +126,7 @@ def embed_email_chunks(
     vectors = embed_texts(
         texts,
         endpoint=embedding_cfg["endpoint"],
-        auth_token=embedding_cfg["auth_token"],
+        auth_token=os.environ["HF_TOKEN"],
         timeout_seconds=embedding_cfg["timeout_seconds"],
         max_retries=embedding_cfg["max_retries"],
     )
@@ -398,25 +399,14 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def load_env():
-    # minimal .env loader (no dependency)
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip())
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cleaned-dir", required=True)
     ap.add_argument("--config", required=True)
     args = ap.parse_args()
 
-    load_env()
+    load_dotenv()
+
 
     cfg = expand_env_vars(load_config(Path(args.config)))
 
@@ -425,7 +415,7 @@ def main():
     pinecone_cfg = embedding_cfg["vector_db"]
 
     index = init_pinecone_index(
-        api_key=pinecone_cfg["api_key"],
+        api_key=os.environ["PINECONE_API_KEY"],
         index_name=pinecone_cfg["index_name"],
     )
 
