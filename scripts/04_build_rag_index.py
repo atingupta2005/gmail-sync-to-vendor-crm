@@ -134,11 +134,10 @@ def embed_texts(
             raise ValueError(f"Unexpected embedding response format: {type(data)}")
 
         except Exception as e:
-            last_err = e
-            if attempt < max_retries:
-                time.sleep(2 * attempt)
-                continue
-            raise last_err
+            print("🔥 EMBED ERROR:", repr(e))
+            print("🔥 RAW RESPONSE TYPE:", type(data) if 'data' in locals() else None)
+            print("🔥 RAW RESPONSE VALUE:", data if 'data' in locals() else None)
+            raise
 
 
 from pinecone import Pinecone
