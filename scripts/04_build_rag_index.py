@@ -2,6 +2,30 @@ from dotenv import load_dotenv
 from datetime import datetime
 from typing import List, Dict
 
+from functools import wraps
+from time import perf_counter
+
+def debug_step(name):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            print(f"[DEBUG] → {name}.start")
+            t0 = perf_counter()
+            result = fn(*args, **kwargs)
+            dt = perf_counter() - t0
+
+            if isinstance(result, list):
+                size = len(result)
+            elif result is None:
+                size = None
+            else:
+                size = result
+
+            print(f"[DEBUG] ← {name}.end | result={size} | {dt:.2f}s")
+            return result
+        return wrapper
+    return decorator
+
 
 def chunk_email(cleaned_email: dict) -> List[Dict]:
     """
@@ -41,7 +65,9 @@ def chunk_email(cleaned_email: dict) -> List[Dict]:
 import time
 import requests
 
-
+@debug_step(
+    "embed_texts"
+)
 def embed_texts(
     texts: List[str],
     *,
@@ -119,7 +145,7 @@ def init_pinecone_index(
     pc = Pinecone(api_key=api_key)
     return pc.Index(index_name)
 
-
+@debug_step("embed_email_chunks")
 def embed_email_chunks(
     cleaned_email: dict,
     *,
@@ -213,6 +239,7 @@ def mean_pool(token_embeddings: List[List[float]]) -> List[float]:
     return [v / len(token_embeddings) for v in pooled]
 
 
+@debug_step("upsert_vectors")
 def upsert_vectors(
     *,
     index,
@@ -233,7 +260,9 @@ def upsert_vectors(
     index.upsert(vectors=records, namespace="emails")
 
 
-
+@debug_step(
+    "process_single_cleaned_email"
+)
 def process_single_cleaned_email(
     *,
     cleaned_email: dict,
