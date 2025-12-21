@@ -19,7 +19,7 @@ from typing import Dict, Any, Optional, List
 
 from registry import append_registry_entry
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("ingest")
 
 
@@ -43,6 +43,7 @@ def extract_body(msg) -> Dict[str, Optional[str]]:
             try:
                 if ctype == "text/plain" and text is None:
                     text = part.get_content().strip()
+                    break
                 elif ctype == "text/html" and html is None:
                     html = part.get_content()
             except Exception:
@@ -101,7 +102,7 @@ def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
+        json.dump(data, fh, ensure_ascii=False)
     tmp.replace(path)
 
 
@@ -129,6 +130,7 @@ def process_maildir(
                     continue
                 files.append(f)
 
+
     files.sort()
     logger.info("Found %d message files in %s", len(files), maildir_root)
 
@@ -139,9 +141,15 @@ def process_maildir(
 
     for fpath in files:
         try:
+            stat = fpath.stat()
+            fast_key = f"{fpath.name}:{stat.st_mtime}:{stat.st_size}"
+
+            prev = registry_cache.get(fast_key)
+            if prev:
+                continue
+
             raw_bytes = fpath.read_bytes()
             msg = BytesParser(policy=policy.default).parsebytes(raw_bytes)
-
             email_id, content_hash = compute_email_id_and_hash(raw_bytes, msg)
 
             prev = registry_cache.get(email_id)
