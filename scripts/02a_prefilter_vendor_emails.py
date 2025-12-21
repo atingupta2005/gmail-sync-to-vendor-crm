@@ -210,7 +210,7 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
             processed += 1
         except Exception as e:
             logger.exception("Failed to prefilter %s: %s", f, e)
-    logger.debug("Prefilter processed %d files", processed)
+    logger.warning("Prefilter processed %d files", processed)
 
 
 def main(argv=None):
