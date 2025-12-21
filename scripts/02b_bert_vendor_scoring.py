@@ -379,6 +379,9 @@ def main() -> int:
     cfg_yaml = _load_yaml_minimal(Path(args.config))
     cfg = Step2BConfig(cfg_yaml, args.link_method)
 
+    LOG.info("Vendor scoring started (model=%s)", cfg.model_version)
+
+
     pre_dir = Path(args.prefiltered_dir).expanduser().resolve()
     cand_dir = Path(args.candidates_dir).expanduser().resolve()
     st_dir = Path(args.state_dir).expanduser().resolve()
@@ -449,6 +452,9 @@ def main() -> int:
                 "model_versions": {"step2b_model_version": cfg.model_version},
             })
             processed += 1
+            if processed % 100 == 0:
+                LOG.info("Progress: processed=%d skipped=%d passed=%d failed=%d",
+                        processed, skipped, passed, failed)
         except Exception as e:
             failed += 1
             logging.error("error scoring %s: %s", eid, e)
