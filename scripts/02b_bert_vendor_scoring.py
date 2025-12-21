@@ -174,6 +174,30 @@ def detect_signature(body: str, max_lines: int, min_hits: int) -> str:
     return ""
 
 
+def write_candidate_email(
+    src_path: Path,
+    dst_path: Path,
+    email_obj: dict[str, Any],
+    prob: float,
+    cfg: Step2BConfig,
+) -> None:
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    out = dict(email_obj)  # shallow copy is fine
+
+    out["bert"] = {
+        "vendor_probability": prob,
+        "threshold": cfg.threshold,
+        "model_version": cfg.model_version,
+        "endpoint": cfg.endpoint,
+        "label": "vendor",
+        "scored_at": utc_now_iso(),
+    }
+
+    with dst_path.open("w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+
+
 def build_input_text(email_obj: dict[str, Any], cfg: Step2BConfig) -> str:
     hdrs = email_obj.get("headers") or {}
     subj = str(hdrs.get("subject", "") or "").strip()
@@ -400,7 +424,13 @@ def main() -> int:
             })
 
             if label == "vendor":
-                link_or_copy(p, shard_path(cand_dir, eid), cfg.link_method)
+                write_candidate_email(
+                    src_path=p,
+                    dst_path=shard_path(cand_dir, eid),
+                    email_obj=email_obj,
+                    prob=prob,
+                    cfg=cfg,
+                )
                 passed += 1
 
             append_jsonl(registry_path, {
