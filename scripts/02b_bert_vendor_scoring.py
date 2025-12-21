@@ -452,7 +452,7 @@ def main() -> int:
                 "model_versions": {"step2b_model_version": cfg.model_version},
             })
             processed += 1
-            if processed % 100 == 0:
+            if processed % 10 == 0:
                 LOG.info("Progress: processed=%d skipped=%d passed=%d failed=%d",
                         processed, skipped, passed, failed)
         except Exception as e:
