@@ -18,7 +18,7 @@ try:
 except Exception:
     yaml = None  # we will error with helpful message if config is YAML and pyyaml not installed
 
-from registry import append_registry_entry, get_registry_entry
+from registry import append_registry_entry
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("prefilter")
@@ -45,17 +45,17 @@ def load_email_json(path: Path) -> Dict[str, Any]:
 
 
 def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str]):
+    pre = config.get("prefilter", {})
     threshold = int(pre.get("threshold", 999))
+
     reasons: List[str] = []
     score = 0
 
-    pre = config.get("prefilter", {})
     subject_weight = float(pre.get("subject_weight", 1.0))
     body_weight = float(pre.get("body_weight", 0.5))
 
     subject = (email.get("headers", {}).get("Subject") or "").lower()
     body = (email.get("body", {}).get("raw_text") or "").lower()[:5000]
-
 
     # ---- POSITIVE KEYWORDS ----
     for group_name, group in pre.get("positive_keywords", {}).items():
@@ -65,21 +65,25 @@ def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str
         for term in terms:
             t = term.lower()
             if t in subject:
-                delta = int(weight * subject_weight)
-                score += delta
+                score += int(weight * subject_weight)
                 reasons.append(f"{group_name}:subject:{term}")
             elif t in body:
-                delta = int(weight * body_weight)
-                score += delta
+                score += int(weight * body_weight)
                 reasons.append(f"{group_name}:body:{term}")
+
+            # ✅ EARLY EXIT (safe)
+            if score >= threshold:
+                return score, reasons
 
     # ---- ATTACHMENTS ----
     att_cfg = pre.get("attachments", {})
     mime = email.get("mime_meta", {})
     if mime.get("has_attachments"):
-        w = int(att_cfg.get("has_attachment_weight", 0))
-        score += w
+        score += int(att_cfg.get("has_attachment_weight", 0))
         reasons.append("attachment:present")
+
+        if score >= threshold:
+            return score, reasons
 
         for att in mime.get("attachments", []):
             fname = (att.get("filename") or "").lower()
@@ -87,6 +91,9 @@ def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str
                 if kw.lower() in fname:
                     score += int(att_cfg.get("filename_keyword_weight", 0))
                     reasons.append(f"attachment:filename:{kw}")
+
+                    if score >= threshold:
+                        return score, reasons
 
     # ---- NEGATIVE KEYWORDS ----
     for group_name, group in pre.get("negative_keywords", {}).items():
@@ -100,6 +107,7 @@ def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str
     return score, reasons
 
 
+
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
@@ -111,14 +119,13 @@ def atomic_copy(src: Path, dst: Path) -> None:
     tmp.replace(dst)
 
 
-# ---- LOAD REGISTRY ONCE (performance critical) ----
-registry_cache: Dict[str, Dict[str, Any]] = {}
-
-
 
 def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_path: Path, config: Dict[str, Any], limit: int = 0, only_prefix: Optional[str] = None, dry_run: bool = False):
     # gather files
 # gather files (mailbox -> shard -> email.json)
+    # ---- LOAD REGISTRY ONCE (performance critical) ----
+    registry_cache: Dict[str, Dict[str, Any]] = {}
+
     if os.path.exists(registry_path):
         with open(registry_path, "r", encoding="utf-8") as fh:
             for line in fh:
@@ -146,7 +153,7 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
                     files.append(f)
 
     files.sort()
-    logger.info("Prefilter: found %d candidate files", len(files))
+    logger.debug("Prefilter: found %d candidate files", len(files))
     if limit and limit > 0:
         files = files[:limit]
 
@@ -167,8 +174,7 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
                 continue
 
             score, reasons = score_email(email, config)
-            if score >= threshold:
-                return score, reasons
+
             passed = score >= threshold
             decision = {
                 "email_id": email_id,
@@ -179,7 +185,7 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
             }
 
             if dry_run:
-                logger.info("[dry-run] %s -> score=%d passed=%s reasons=%s", email_id, score, passed, reasons)
+                logger.debug("[dry-run] %s -> score=%d passed=%s reasons=%s", email_id, score, passed, reasons)
             else:
                 # write decision log
                 ensure_dir(str(decision_log_path.parent))
@@ -204,7 +210,7 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
             processed += 1
         except Exception as e:
             logger.exception("Failed to prefilter %s: %s", f, e)
-    logger.info("Prefilter processed %d files", processed)
+    logger.debug("Prefilter processed %d files", processed)
 
 
 def main(argv=None):
