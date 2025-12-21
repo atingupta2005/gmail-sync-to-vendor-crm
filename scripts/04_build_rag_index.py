@@ -100,23 +100,34 @@ def embed_texts(
             )
             resp.raise_for_status()
             data = resp.json()
-            data = resp.json()
-            print("EMBEDDINGS RECEIVED:", len(data))
+
+            # data can be:
+            # 1) List[List[float]]              -> already pooled
+            # 2) List[List[List[float]]]        -> token embeddings
 
             vectors = []
 
-            # data = List[List[List[float]]]
-            # one item per input text
             for item in data:
-                dim = len(item[0])
-                pooled = [0.0] * dim
-                for token_vec in item:
-                    for i, v in enumerate(token_vec):
-                        pooled[i] += v
-                pooled = [v / len(item) for v in pooled]
-                vectors.append(pooled)
+                # Case 1: already pooled vector
+                if isinstance(item, list) and item and isinstance(item[0], (int, float)):
+                    vectors.append(item)
+                    continue
+
+                # Case 2: token embeddings -> mean pool
+                if isinstance(item, list) and item and isinstance(item[0], list):
+                    dim = len(item[0])
+                    pooled = [0.0] * dim
+                    for token_vec in item:
+                        for i, v in enumerate(token_vec):
+                            pooled[i] += v
+                    pooled = [v / len(item) for v in pooled]
+                    vectors.append(pooled)
+                    continue
+
+                raise ValueError(f"Unsupported embedding item format: {type(item)}")
 
             return vectors
+
 
 
 
