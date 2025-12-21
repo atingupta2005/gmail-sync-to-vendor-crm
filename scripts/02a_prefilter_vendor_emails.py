@@ -45,31 +45,55 @@ def load_email_json(path: Path) -> Dict[str, Any]:
 
 
 def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str]):
-    """
-    Compute a simple integer score and return reasons.
-    Config expected to contain prefilter.keyword_weights mapping and prefilter.threshold.
-    """
     reasons: List[str] = []
     score = 0
-    weights = config.get("prefilter", {}).get("keyword_weights", {})
-    subject = (email.get("headers", {}).get("Subject") or "") or ""
-    body = email.get("body", {}).get("raw_text") or ""
-    text = f"{subject}\n{body}".lower()
-    for kw, w in weights.items():
-        if kw.lower() in text:
-            score += int(w)
-            reasons.append(f"keyword:{kw}")
 
-    # attachment boost
-    if email.get("mime_meta", {}).get("has_attachments"):
-        score += int(config.get("prefilter", {}).get("attachment_boost", 1))
-        reasons.append("has_attachment")
+    pre = config.get("prefilter", {})
+    subject_weight = float(pre.get("subject_weight", 1.0))
+    body_weight = float(pre.get("body_weight", 0.5))
 
-    # automated sender negative signal (noreply)
-    sender = (email.get("headers", {}).get("From") or "") or ""
-    if "noreply" in sender.lower() or "no-reply" in sender.lower() or "do-not-reply" in sender.lower():
-        score -= 5
-        reasons.append("automated_sender")
+    subject = (email.get("headers", {}).get("Subject") or "").lower()
+    body = (email.get("body", {}).get("raw_text") or "").lower()
+
+    # ---- POSITIVE KEYWORDS ----
+    for group_name, group in pre.get("positive_keywords", {}).items():
+        weight = int(group.get("weight", 0))
+        terms = group.get("terms", [])
+
+        for term in terms:
+            t = term.lower()
+            if t in subject:
+                delta = int(weight * subject_weight)
+                score += delta
+                reasons.append(f"{group_name}:subject:{term}")
+            elif t in body:
+                delta = int(weight * body_weight)
+                score += delta
+                reasons.append(f"{group_name}:body:{term}")
+
+    # ---- ATTACHMENTS ----
+    att_cfg = pre.get("attachments", {})
+    mime = email.get("mime_meta", {})
+    if mime.get("has_attachments"):
+        w = int(att_cfg.get("has_attachment_weight", 0))
+        score += w
+        reasons.append("attachment:present")
+
+        for att in mime.get("attachments", []):
+            fname = (att.get("filename") or "").lower()
+            for kw in att_cfg.get("filename_keywords", []):
+                if kw.lower() in fname:
+                    score += int(att_cfg.get("filename_keyword_weight", 0))
+                    reasons.append(f"attachment:filename:{kw}")
+
+    # ---- NEGATIVE KEYWORDS ----
+    for group_name, group in pre.get("negative_keywords", {}).items():
+        weight = int(group.get("weight", 0))
+        for term in group.get("terms", []):
+            t = term.lower()
+            if t in subject or t in body:
+                score += weight
+                reasons.append(f"negative:{group_name}:{term}")
 
     return score, reasons
 
