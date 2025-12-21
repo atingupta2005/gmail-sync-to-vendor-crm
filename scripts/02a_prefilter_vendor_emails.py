@@ -3,7 +3,7 @@
 Step 2A — Heuristic prefilter: score emails and write decision log + pass/fail outputs.
 """
 from __future__ import annotations
-
+import time
 import argparse
 import json
 import logging
@@ -237,6 +237,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
+        logger.warning("Prefilter: sleeping for 5 minutes")
+        time.sleep(300)
 
 

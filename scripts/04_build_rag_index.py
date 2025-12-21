@@ -503,5 +503,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
+        time.sleep(300)
+        print("RAG Index: sleeping for 5 minutes")
 

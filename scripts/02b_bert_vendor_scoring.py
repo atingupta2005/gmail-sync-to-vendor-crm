@@ -460,4 +460,7 @@ def main() -> int:
 if __name__ == "__main__":
     load_dotenv(dotenv_path=".env")
     
-    raise SystemExit(main())
+    while True:
+        main()
+        time.sleep(300)
+        LOG.info("Vendor Scoring: sleeping for 5 minutes")

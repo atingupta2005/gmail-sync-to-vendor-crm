@@ -4,7 +4,7 @@ Step 1 — Ingest Maildir (cur/, new/) and write one JSON per email.
 Incremental, idempotent, and fast.
 """
 from __future__ import annotations
-
+import time
 import argparse
 import hashlib
 import json
@@ -250,4 +250,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
+        logger.warning("Ingest: sleeping for 5 minutes")
+        time.sleep(300)

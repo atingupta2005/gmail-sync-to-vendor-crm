@@ -7,7 +7,7 @@ and contact information.
 
 NO AI usage. Deterministic only.
 """
-
+import time
 import argparse
 import json
 import logging
@@ -299,4 +299,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    while True:
+        main()
+        time.sleep(300)
+        LOG.warning("Cleanup: sleeping for 5 minutes")
