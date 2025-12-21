@@ -1,0 +1,1 @@
+def call_inference(text: str, cfg: Step2BConfig) -> float:

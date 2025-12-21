@@ -214,22 +214,71 @@ def normalize_resp(resp: dict[str, Any]) -> float:
         raise ValueError("inference response missing vendor_probability")
     return float(p)
 
+def extract_vendor_probability_from_hf(resp) -> float:
+    """
+    Supports HF zero-shot formats:
+    1) [{"label": "...", "score": ...}, ...]
+    2) {"labels": [...], "scores": [...]}
+    """
+    # Format 1: list of {label, score}
+    if isinstance(resp, list):
+        for item in resp:
+            label = str(item.get("label", "")).lower()
+            if "vendor" in label:
+                return float(item.get("score"))
+        raise ValueError("Vendor label not found in HF list response")
+
+    # Format 2: dict with labels/scores
+    if isinstance(resp, dict):
+        labels = resp.get("labels", [])
+        scores = resp.get("scores", [])
+        for label, score in zip(labels, scores):
+            if "vendor" in label.lower():
+                return float(score)
+        raise ValueError("Vendor label not found in HF dict response")
+
+    raise ValueError("Unrecognized HF response format")
+
 
 def call_inference(text: str, cfg: Step2BConfig) -> float:
-    payload = {"text": text, "model_version": cfg.model_version}
-    last_err: str = ""
+    headers = {
+        "Authorization": f"Bearer {cfg.auth_token}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "candidate_labels": [
+                "vendor related business email",
+                "non-vendor personal or automated email",
+            ],
+            "hypothesis_template": "This email is {}.",
+        },
+    }
+
+    last_err = None
     for attempt in range(cfg.max_retries + 1):
         try:
-            r = requests.post(cfg.endpoint, json=payload, timeout=cfg.timeout_seconds)
+            r = requests.post(
+                cfg.endpoint,
+                headers=headers,
+                json=payload,
+                timeout=cfg.timeout_seconds,
+            )
             r.raise_for_status()
-            j = r.json()
-            return normalize_resp(j)
+            data = r.json()
+
+            return extract_vendor_probability_from_hf(data)
+
         except Exception as e:
             last_err = str(e)
             if attempt < cfg.max_retries:
-                time.sleep(cfg.retry_backoff * (2**attempt))
+                time.sleep(2 ** attempt)
                 continue
-    raise RuntimeError(f"Inference failed: {last_err}")
+
+    raise RuntimeError(f"Hugging Face inference failed: {last_err}")
+
 
 
 # ----------------------------
