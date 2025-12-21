@@ -8,7 +8,7 @@ from typing import List
 
 # ---------- config ----------
 INDEX_NAME = "vendor-emails"
-EMBED_ENDPOINT = "https://api-inference.huggingface.co/pipeline/feature-extraction/BAAI/bge-base-en-v1.5"
+EMBED_ENDPOINT = "https://router.huggingface.co/hf-inference/models/BAAI/bge-base-en-v1.5"
 TOP_K = 5
 # ----------------------------
 
