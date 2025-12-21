@@ -74,18 +74,24 @@ def embed_texts(
             )
             resp.raise_for_status()
             data = resp.json()
+            data = resp.json()
             print("EMBEDDINGS RECEIVED:", len(data))
 
-            # HF feature-extraction typically returns: List[List[float]]
-            if isinstance(data, list) and data and isinstance(data[0], list):
-                # Mean-pool token embeddings
-                dim = len(data[0])
+            vectors = []
+
+            # data = List[List[List[float]]]
+            # one item per input text
+            for item in data:
+                dim = len(item[0])
                 pooled = [0.0] * dim
-                for token_vec in data:
+                for token_vec in item:
                     for i, v in enumerate(token_vec):
                         pooled[i] += v
-                pooled = [v / len(data) for v in pooled]
-                return [pooled]  # ONE vector per text
+                pooled = [v / len(item) for v in pooled]
+                vectors.append(pooled)
+
+            return vectors
+
 
 
             raise ValueError(f"Unexpected embedding response format: {type(data)}")
