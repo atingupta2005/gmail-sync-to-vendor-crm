@@ -405,8 +405,7 @@ def main():
     ap.add_argument("--config", required=True)
     args = ap.parse_args()
 
-    load_dotenv()
-
+    load_dotenv(dotenv_path=".env")
 
     cfg = expand_env_vars(load_config(Path(args.config)))
 
