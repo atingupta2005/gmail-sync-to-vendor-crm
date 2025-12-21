@@ -6,6 +6,14 @@ import os
 from functools import wraps
 from time import perf_counter
 
+def log_progress(processed, total_vectors, every=50):
+    if processed % every == 0:
+        print(
+            f"[PROGRESS] emails={processed} "
+            f"vectors={total_vectors} "
+            f"time={datetime.utcnow().isoformat()}Z"
+        )
+
 def debug_step(name):
     def decorator(fn):
         @wraps(fn)
@@ -68,7 +76,6 @@ import requests
 
 _SESSION = requests.Session()
 
-@debug_step("embed_texts")
 def embed_texts(
     texts: List[str],
     *,
@@ -131,7 +138,7 @@ def init_pinecone_index(
     pc = Pinecone(api_key=api_key)
     return pc.Index(index_name)
 
-@debug_step("embed_email_chunks")
+
 def embed_email_chunks(
     cleaned_email: dict,
     *,
@@ -227,7 +234,6 @@ def upsert_vectors(
         index.upsert(vectors=buffer, namespace="emails")
         buffer.clear()
 
-@debug_step("process_single_cleaned_email")
 def process_single_cleaned_email(
     *,
     cleaned_email: dict,
@@ -345,12 +351,14 @@ def process_all_cleaned_emails(
     registry_path: Path,
 ):
     upsert_buffer = []
+    processed_emails = 0
 
     registry = load_registry(registry_path)
     total_vectors = 0
 
     for path, cleaned_email in iter_cleaned_emails(cleaned_dir):
-        print("FOUND CLEANED EMAIL:", path)
+        if processed_emails % 100 == 0:
+            print("FOUND CLEANED EMAIL:", path)
 
         email_id = cleaned_email["email_id"]
         content_hash = cleaned_email.get("content_hash")
@@ -388,7 +396,10 @@ def process_all_cleaned_emails(
                     "timestamp": datetime.utcnow().isoformat(),
                 },
             )
+            processed_emails += 1
             total_vectors += n
+
+            log_progress(processed_emails, total_vectors)
 
         except Exception as e:
             append_registry(
