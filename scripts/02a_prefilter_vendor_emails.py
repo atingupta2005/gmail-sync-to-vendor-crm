@@ -20,7 +20,7 @@ except Exception:
 
 from registry import append_registry_entry, get_registry_entry
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("prefilter")
 
 
@@ -45,6 +45,7 @@ def load_email_json(path: Path) -> Dict[str, Any]:
 
 
 def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str]):
+    threshold = int(pre.get("threshold", 999))
     reasons: List[str] = []
     score = 0
 
@@ -53,7 +54,8 @@ def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str
     body_weight = float(pre.get("body_weight", 0.5))
 
     subject = (email.get("headers", {}).get("Subject") or "").lower()
-    body = (email.get("body", {}).get("raw_text") or "").lower()
+    body = (email.get("body", {}).get("raw_text") or "").lower()[:5000]
+
 
     # ---- POSITIVE KEYWORDS ----
     for group_name, group in pre.get("positive_keywords", {}).items():
@@ -109,6 +111,19 @@ def atomic_copy(src: Path, dst: Path) -> None:
     tmp.replace(dst)
 
 
+# ---- LOAD REGISTRY ONCE (performance critical) ----
+registry_cache: Dict[str, Dict[str, Any]] = {}
+
+if os.path.exists(registry_path):
+    with open(registry_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+                if "email_id" in r:
+                    registry_cache[r["email_id"]] = r
+            except Exception:
+                continue
+
 def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_path: Path, config: Dict[str, Any], limit: int = 0, only_prefix: Optional[str] = None, dry_run: bool = False):
     # gather files
 # gather files (mailbox -> shard -> email.json)
@@ -144,12 +159,14 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
                 logger.warning("Skipping file without email_id: %s", f)
                 continue
 
-            registry_entry = get_registry_entry(registry_path, email_id)
+            registry_entry = registry_cache.get(email_id)
             if registry_entry and registry_entry.get("content_hash") == content_hash and registry_entry.get("last_completed_step") == "step2a_prefilter":
                 logger.debug("Skipping unchanged %s", email_id)
                 continue
 
             score, reasons = score_email(email, config)
+            if score >= threshold:
+                return score, reasons
             passed = score >= threshold
             decision = {
                 "email_id": email_id,
@@ -180,7 +197,7 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
                     "last_completed_step": "step2a_prefilter",
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                 })
-                logger.info("Processed %s -> score=%d passed=%s", email_id, score, passed)
+                logger.debug("Processed %s -> score=%d passed=%s", email_id, score, passed)
 
             processed += 1
         except Exception as e:
