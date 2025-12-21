@@ -237,18 +237,6 @@ def build_vector_records(
 
     return records
 
-def mean_pool(token_embeddings: List[List[float]]) -> List[float]:
-    """
-    Mean-pool token embeddings into a single vector.
-    """
-    dim = len(token_embeddings[0])
-    pooled = [0.0] * dim
-    for vec in token_embeddings:
-        for i, v in enumerate(vec):
-            pooled[i] += v
-    return [v / len(token_embeddings) for v in pooled]
-
-
 @debug_step("upsert_vectors")
 def upsert_vectors(
     *,
