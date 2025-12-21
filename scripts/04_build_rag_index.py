@@ -93,8 +93,6 @@ def embed_texts(
 
     for attempt in range(1, max_retries + 1):
         try:
-            print("CALLING EMBEDDING API WITH", len(texts), "TEXTS")
-
             resp = _SESSION.post(
                 endpoint,
                 headers=headers,
