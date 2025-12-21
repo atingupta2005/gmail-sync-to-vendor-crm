@@ -4,6 +4,7 @@ import os
 import requests
 from dotenv import load_dotenv
 from pinecone import Pinecone
+from typing import List
 
 # ---------- config ----------
 INDEX_NAME = "vendor-emails"
@@ -11,7 +12,7 @@ EMBED_ENDPOINT = "https://api-inference.huggingface.co/pipeline/feature-extracti
 TOP_K = 5
 # ----------------------------
 
-def embed_query(text: str) -> list[float]:
+def embed_query(text: str) -> List[float]:
     headers = {
         "Authorization": f"Bearer {os.environ['HF_TOKEN']}",
         "Content-Type": "application/json",
