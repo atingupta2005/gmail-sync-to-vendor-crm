@@ -42,6 +42,19 @@ prefilter:
   body_weight: 0.5
 
   positive_keywords:
+    conversational_business:
+      weight: 1
+      terms:
+        - following up
+        - as discussed
+        - please confirm
+        - confirmed
+        - noted
+        - acknowledged
+        - sharing availability
+        - sharing details
+        - discussed earlier
+        - proceeding further
     training_delivery:
       weight: 3
       terms:
