@@ -1,8 +1,15 @@
 # Example configuration for gmail-sync-to-vendor-crm
-#
+# 
 # Fill in values or copy this to config/config.yaml and edit.
-
-maildir_root: "/path/to/Mail/account/Inbox"
+#
+# Maildir root: set to the Maildir folder you want to ingest.
+# This can be your Inbox or your Sent folder (for example:
+# "/home/you/Mail/account/Inbox" or "/home/you/Mail/account/Sent")
+#
+# Alternatively you can supply multiple maildir roots when running the script:
+#   python scripts/01_ingest_maildir_to_json.py --maildir-roots /home/you/Mail/account/Inbox /home/you/Mail/account/Sent ...
+#
+maildir_root: "/home/atingupta2005/Mail/Gmail/Inbox"
 
 # Output directories (relative to project root)
 output:

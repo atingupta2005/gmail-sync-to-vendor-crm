@@ -107,7 +107,7 @@ def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def process_maildir(maildir_root: Path, output_dir: Path, registry_path: str, limit: int = 0, only_prefix: Optional[str] = None, dry_run: bool = False):
+def process_maildir(maildir_root: Path, output_dir: Path, registry_path: str, folder_label: str, limit: int = 0, only_prefix: Optional[str] = None, dry_run: bool = False):
     files = []
     for sub in ("cur", "new"):
         p = maildir_root / sub
@@ -117,14 +117,14 @@ def process_maildir(maildir_root: Path, output_dir: Path, registry_path: str, li
             if f.is_file():
                 if only_prefix and not f.name.startswith(only_prefix):
                     continue
-                files.append(f)
-    files.sort()
-    logger.info("Found %d message files", len(files))
+                files.append((f, sub))
+    files.sort(key=lambda x: str(x[0]))
+    logger.info("Found %d message files in %s", len(files), maildir_root)
     if limit and limit > 0:
         files = files[:limit]
 
     processed = 0
-    for fpath in files:
+    for fpath, subdir_name in files:
         try:
             raw_bytes = fpath.read_bytes()
             msg = BytesParser(policy=policy.default).parsebytes(raw_bytes)
@@ -141,6 +141,9 @@ def process_maildir(maildir_root: Path, output_dir: Path, registry_path: str, li
             out = {
                 "email_id": email_id,
                 "content_hash": content_hash,
+                "origin_maildir": str(maildir_root),
+                "origin_subdir": subdir_name,
+                "source_filename": fpath.name,
                 "maildir_path": str(fpath),
                 "file_mtime": stat.st_mtime,
                 "file_size": stat.st_size,
@@ -154,8 +157,9 @@ def process_maildir(maildir_root: Path, output_dir: Path, registry_path: str, li
                 },
             }
 
+            # preserve source folder label in output path to allow combining multiple maildirs
             subdir = email_id[:2]
-            out_path = output_dir / subdir / f"{email_id}.json"
+            out_path = output_dir / folder_label / subdir / f"{email_id}.json"
             if dry_run:
                 logger.info("[dry-run] would write %s", out_path)
             else:
@@ -180,7 +184,7 @@ def process_maildir(maildir_root: Path, output_dir: Path, registry_path: str, li
                     "processing": {"ingested_at": datetime.utcnow().isoformat() + "Z", "parsed_ok": False, "parse_error": str(e)},
                 }
                 if not dry_run:
-                    failed_path = output_dir / "failed" / f"{fpath.name}.json"
+                    failed_path = output_dir / folder_label / "failed" / f"{fpath.name}.json"
                     atomic_write_json(failed_path, failed)
                     append_registry_entry(registry_path, {
                         "email_id": f"{fpath.name}-failed",
@@ -197,7 +201,8 @@ def process_maildir(maildir_root: Path, output_dir: Path, registry_path: str, li
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--maildir-root", required=True, help="Path to Maildir root (contains cur/ and new/)")
+    parser.add_argument("--maildir-root", help="Path to Maildir root (contains cur/ and new/). Deprecated: prefer --maildir-roots.")
+    parser.add_argument("--maildir-roots", nargs="+", help="One or more Maildir root paths to ingest (e.g. /home/user/Mail/Inbox /home/user/Mail/Sent)")
     parser.add_argument("--output-dir", required=True, help="Output base directory for emails_raw_json")
     parser.add_argument("--state-dir", required=True, help="State directory (processing registry JSONL)")
     parser.add_argument("--limit", type=int, default=0, help="Process only N files (0 = all)")
@@ -205,12 +210,21 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="Do not write outputs; show planned actions")
     args = parser.parse_args(argv)
 
-    maildir_root = Path(args.maildir_root)
     output_dir = Path(args.output_dir)
     state_dir = Path(args.state_dir)
     registry_path = str(Path(state_dir) / "processing_registry.jsonl")
 
-    process_maildir(maildir_root, output_dir, registry_path, limit=args.limit, only_prefix=args.only_prefix, dry_run=args.dry_run)
+    roots: List[Path] = []
+    if args.maildir_roots:
+        roots = [Path(p) for p in args.maildir_roots]
+    elif args.maildir_root:
+        roots = [Path(args.maildir_root)]
+    else:
+        parser.error("Either --maildir-root or --maildir-roots is required")
+
+    for root in roots:
+        folder_label = root.name or "maildir"
+        process_maildir(root, output_dir, registry_path, folder_label, limit=args.limit, only_prefix=args.only_prefix, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

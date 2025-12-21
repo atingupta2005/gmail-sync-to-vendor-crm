@@ -23,6 +23,8 @@ pip install -r requirements.txt
 
 ```bash
 cp config/config.yaml.example config/config.yaml
+cat config/config.yaml
+nano config/config.yaml
 # edit config/config.yaml to set maildir_root and endpoints
 ```
 
