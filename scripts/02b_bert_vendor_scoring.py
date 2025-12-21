@@ -368,7 +368,7 @@ def main() -> int:
     ap.add_argument("--prefiltered-dir", required=True)
     ap.add_argument("--candidates-dir", required=True)
     ap.add_argument("--state-dir", required=True)
-    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--config", default="config/config.yaml")
     ap.add_argument("--link-method", default="hardlink", choices=["hardlink", "symlink", "copy"])
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--log-level", default="INFO")
