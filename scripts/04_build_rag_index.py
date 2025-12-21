@@ -78,7 +78,15 @@ def embed_texts(
 
             # HF feature-extraction typically returns: List[List[float]]
             if isinstance(data, list) and data and isinstance(data[0], list):
-                return data
+                # Mean-pool token embeddings
+                dim = len(data[0])
+                pooled = [0.0] * dim
+                for token_vec in data:
+                    for i, v in enumerate(token_vec):
+                        pooled[i] += v
+                pooled = [v / len(data) for v in pooled]
+                return [pooled]  # ONE vector per text
+
 
             raise ValueError(f"Unexpected embedding response format: {type(data)}")
 
