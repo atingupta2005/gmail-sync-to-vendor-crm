@@ -36,12 +36,132 @@ bert:
 
 # Prefilter scoring (Step 2A)
 prefilter:
-  threshold: 3
-  keyword_weights:
-    invoice: 3
-    payment: 3
-    quote: 3
-    training: 2
+  threshold: 4
+
+  subject_weight: 1.0
+  body_weight: 0.5
+
+  positive_keywords:
+    training_delivery:
+      weight: 3
+      terms:
+        - training
+        - trainer
+        - workshop
+        - course
+        - session
+        - agenda
+        - curriculum
+        - syllabus
+        - content
+        - batch
+        - delivery
+        - schedule
+        - calendar
+        - availability
+        - dates
+
+    commercial:
+      weight: 3
+      terms:
+        - invoice
+        - tax invoice
+        - billing
+        - bill
+        - payment
+        - paid
+        - receipt
+        - quote
+        - quotation
+        - proposal
+        - estimate
+        - contract
+        - agreement
+
+    purchase_order:
+      weight: 4
+      terms:
+        - purchase order
+        - po
+        - po number
+        - work order
+
+    vague_attachment_phrases:
+      weight: 2
+      terms:
+        - please find attached
+        - find attached
+        - as discussed
+        - attached herewith
+        - sharing the document
+        - sharing the deck
+
+    # SAFETY NET: core consulting / training skills
+    core_skills:
+      weight: 1
+      terms:
+        - generative ai
+        - llm
+        - rag
+        - ai agents
+        - machine learning
+        - mlops
+        - data engineering
+        - databricks
+        - spark
+        - kafka
+        - airflow
+        - dbt
+        - python
+        - azure
+        - aws
+        - gcp
+        - kubernetes
+        - docker
+        - terraform
+        - devops
+        - devsecops
+        - cloud architecture
+        - platform engineering
+        - blockchain
+        - hyperledger
+        - ethereum
+
+  attachments:
+    has_attachment_weight: 2
+    filename_keyword_weight: 2
+    filename_keywords:
+      - invoice
+      - po
+      - purchase
+      - proposal
+      - agreement
+      - contract
+      - agenda
+      - deck
+      - syllabus
+      - content
+
+  negative_keywords:
+    marketing:
+      weight: -6
+      terms:
+        - unsubscribe
+        - newsletter
+        - promotion
+        - limited offer
+        - buy now
+        - sale
+        - discount
+
+    security:
+      weight: -6
+      terms:
+        - otp
+        - verification code
+        - password reset
+        - security alert
+
 
 # Embeddings (Step 4)
 embedding:
