@@ -195,7 +195,7 @@ def build_vector_records(
 
     return records
 
-def mean_pool(token_embeddings: list[list[float]]) -> list[float]:
+def mean_pool(token_embeddings: List[List[float]]) -> List[float]:
     """
     Mean-pool token embeddings into a single vector.
     """
