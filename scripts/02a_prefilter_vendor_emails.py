@@ -87,14 +87,23 @@ def atomic_copy(src: Path, dst: Path) -> None:
 
 def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_path: Path, config: Dict[str, Any], limit: int = 0, only_prefix: Optional[str] = None, dry_run: bool = False):
     # gather files
+# gather files (mailbox -> shard -> email.json)
     files: List[Path] = []
-    for sub in input_dir.iterdir():
-        if sub.is_dir():
-            for f in sub.iterdir():
-                if f.is_file():
+
+    for mailbox_dir in input_dir.iterdir():
+        if not mailbox_dir.is_dir():
+            continue
+
+        for shard_dir in mailbox_dir.iterdir():
+            if not shard_dir.is_dir():
+                continue
+
+            for f in shard_dir.iterdir():
+                if f.is_file() and f.suffix == ".json":
                     if only_prefix and not f.name.startswith(only_prefix):
                         continue
                     files.append(f)
+
     files.sort()
     logger.info("Prefilter: found %d candidate files", len(files))
     if limit and limit > 0:
