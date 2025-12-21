@@ -199,7 +199,8 @@ def upsert_vectors(
     if not records:
         return
 
-    index.upsert(vectors=records)
+    index.upsert(vectors=records, namespace="emails")
+
 
 
 def process_single_cleaned_email(
@@ -391,7 +392,7 @@ def delete_email_vectors(
     Safe to call even if nothing exists.
     """
     try:
-        index.delete(filter={"email_id": email_id})
+        index.delete(filter={"email_id": email_id}, namespace="emails")
     except NotFoundException:
         # namespace or vectors do not exist yet (first run)
         pass
@@ -444,6 +445,11 @@ def main():
         index_name=pinecone_cfg["index_name"],
     )
 
+    print("Before processing: INDEX STATS:")
+    print("--------------------------------")
+    print(index.describe_index_stats())
+    print("--------------------------------")
+
     total = process_all_cleaned_emails(
         cleaned_dir=Path(args.cleaned_dir),
         embedding_cfg=embedding_cfg,
@@ -452,6 +458,11 @@ def main():
     )
 
     print(f"Indexed {total} vectors")
+    
+    print("After processing: INDEX STATS:")
+    print("--------------------------------")
+    print(index.describe_index_stats())
+    print("--------------------------------")
 
 
 if __name__ == "__main__":
