@@ -304,7 +304,7 @@ def main() -> int:
     cfg = Step2BConfig(cfg_yaml, args.link_method)
 
     pre_dir = Path(args.prefiltered_dir).expanduser().resolve()
-    cand_dir = Path(args.candidates-dir).expanduser().resolve()
+    cand_dir = Path(args.candidates_dir).expanduser().resolve()
     st_dir = Path(args.state_dir).expanduser().resolve()
     registry_path = st_dir / "processing_registry.jsonl"
     decision_log = st_dir / "step2b_vendor_scoring.jsonl"
