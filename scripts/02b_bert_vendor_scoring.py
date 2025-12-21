@@ -27,6 +27,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
+from dotenv import load_dotenv
 
 import requests
 
@@ -66,8 +67,8 @@ class Step2BConfig:
         if not self.endpoint:
             raise ValueError("config: bert.endpoint missing")
 
-        # no auth
-        self.auth_token = str(get_nested(cfg, ["bert", "auth_token"], "")).strip() or None
+        embedding_cfg = dict(cfg["embedding"])
+        self.auth_token = os.environ["HF_TOKEN"]
         
         LOG.info("HF auth token present: %s", bool(self.auth_token))
 
@@ -427,4 +428,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    load_dotenv(dotenv_path=".env")
+    
     raise SystemExit(main())
