@@ -36,13 +36,12 @@ bert:
 
 # Prefilter scoring (Step 2A)
 prefilter:
-  threshold: 5
+  threshold: 3
   keyword_weights:
     invoice: 3
     payment: 3
     quote: 3
     training: 2
-    attachment: 1
 
 # Embeddings (Step 4)
 embedding:
