@@ -1,0 +1,74 @@
+# Example configuration for gmail-sync-to-vendor-crm
+#
+# Fill in values or copy this to config/config.yaml and edit.
+
+maildir_root: "/path/to/Mail/account/Inbox"
+
+# Output directories (relative to project root)
+output:
+  emails_raw_json: "data/emails_raw_json"
+  emails_prefiltered: "data/emails_prefiltered"
+  emails_candidates: "data/emails_candidates"
+  emails_cleaned: "data/emails_cleaned"
+  vendors_raw: "data/vendors_raw"
+  vendors_final: "data/vendors_final"
+  vendors_persisted: "data/vendors_persisted"
+
+state:
+  state_dir: "data/state"
+  processing_registry: "data/state/processing_registry.jsonl"
+
+# BERT inference (Step 2B)
+bert:
+  endpoint: "https://bert.example/api"
+  auth_token: ""
+  model_version: "bert_vendor_v1"
+  timeout_seconds: 30
+  max_retries: 3
+  threshold: 0.7
+
+# Prefilter scoring (Step 2A)
+prefilter:
+  threshold: 5
+  keyword_weights:
+    invoice: 3
+    payment: 3
+    quote: 3
+    training: 2
+    attachment: 1
+
+# Embeddings (Step 4)
+embedding:
+  endpoint: "https://embed.example/api"
+  auth_token: ""
+  model_version: "embed_v1"
+  timeout_seconds: 30
+  max_retries: 3
+  vector_db:
+    type: "faiss" # faiss | qdrant
+    path: "data/vector_db"
+
+# LLM (Step 5 & 6)
+llm:
+  endpoint: "https://llm.example/api"
+  auth_token: ""
+  model_version: "llm_vendor_extract_v1"
+  timeout_seconds: 60
+  max_retries: 3
+  top_k: 4
+
+# Persistence / Mongo (Step 7 optional)
+persistence:
+  output_path: "data/vendors_persisted/vendors.json"
+mongo:
+  enabled: false
+  uri: "mongodb://localhost:27017"
+  database: "vendor_db"
+  collection: "vendors"
+
+# Generic
+cli:
+  dry_run_default: true
+  sample_limit_default: 0
+
+
