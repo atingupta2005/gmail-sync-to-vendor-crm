@@ -42,6 +42,8 @@ prefilter:
   body_weight: 0.5
 
   positive_keywords:
+
+    # Generic business conversation glue
     conversational_business:
       weight: 1
       terms:
@@ -55,6 +57,11 @@ prefilter:
         - sharing details
         - discussed earlier
         - proceeding further
+        - please review
+        - please find below
+        - please advise
+
+    # Training / course delivery intent
     training_delivery:
       weight: 3
       terms:
@@ -69,11 +76,14 @@ prefilter:
         - content
         - batch
         - delivery
+        - delivered
+        - learn
         - schedule
         - calendar
         - availability
         - dates
 
+    # Commercial / financial intent
     commercial:
       weight: 3
       terms:
@@ -90,7 +100,9 @@ prefilter:
         - estimate
         - contract
         - agreement
+        - price
 
+    # Purchase order / formal engagement
     purchase_order:
       weight: 4
       terms:
@@ -98,7 +110,9 @@ prefilter:
         - po
         - po number
         - work order
+        - order
 
+    # Common attachment-driven phrasing
     vague_attachment_phrases:
       weight: 2
       terms:
@@ -108,8 +122,10 @@ prefilter:
         - attached herewith
         - sharing the document
         - sharing the deck
+        - sharing the proposal
+        - sharing the invoice
 
-    # SAFETY NET: core consulting / training skills
+    # SAFETY NET — your core consulting & training skills
     core_skills:
       weight: 1
       terms:
@@ -140,6 +156,7 @@ prefilter:
         - hyperledger
         - ethereum
 
+  # Attachment-based intelligence (very strong signal)
   attachments:
     has_attachment_weight: 2
     filename_keyword_weight: 2
@@ -154,7 +171,16 @@ prefilter:
       - deck
       - syllabus
       - content
+      - price
+      - list
+      - pdf
+      - doc
+      - docx
+      - xls
+      - xlsx
+      - zip
 
+  # Strong negative signals — keep aggressive
   negative_keywords:
     marketing:
       weight: -6
@@ -166,6 +192,8 @@ prefilter:
         - buy now
         - sale
         - discount
+        - special offer
+        - deal
 
     security:
       weight: -6
@@ -174,7 +202,7 @@ prefilter:
         - verification code
         - password reset
         - security alert
-
+        - suspicious activity
 
 # Embeddings (Step 4)
 embedding:
