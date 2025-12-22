@@ -607,6 +607,12 @@ def main() -> int:
             if len(batch_texts) < BATCH_SIZE:
                 continue
 
+            logger.debug(
+                "Calling batch inference: batch_size=%d email_ids=%s",
+                len(batch_records),
+                [eid for (eid, _, _, _) in batch_records],
+            )
+
             probs = call_inference_batch(batch_texts, cfg)
 
             for prob, (eid, email_obj, p, chash) in zip(probs, batch_records):
