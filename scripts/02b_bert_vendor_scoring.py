@@ -31,6 +31,9 @@ from dotenv import load_dotenv
 
 import requests
 
+SESSION = requests.Session()
+BATCH_SIZE = 2
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s",
@@ -297,7 +300,7 @@ def extract_vendor_probability_from_hf(resp) -> float:
     if isinstance(resp, list):
         for item in resp:
             label = str(item.get("label", "")).lower()
-            if "vendor" in label:
+            if label.startswith("vendor"):
                 return float(item.get("score"))
         raise ValueError("Vendor label not found in HF list response")
 
@@ -306,7 +309,7 @@ def extract_vendor_probability_from_hf(resp) -> float:
         labels = resp.get("labels", [])
         scores = resp.get("scores", [])
         for label, score in zip(labels, scores):
-            if "vendor" in label.lower():
+            if label.lower().startswith("vendor"):
                 return float(score)
         raise ValueError("Vendor label not found in HF dict response")
 
@@ -333,7 +336,7 @@ def call_inference(text: str, cfg: Step2BConfig) -> float:
     last_err = None
     for attempt in range(cfg.max_retries + 1):
         try:
-            r = requests.post(
+            r = SESSION.post(
                 cfg.endpoint,
                 headers=headers,
                 json=payload,
@@ -416,6 +419,34 @@ def should_skip(entry: Optional[RegistryEntry], content_hash: str, model_version
         return False
     return True
 
+def call_inference_batch(texts: list[str], cfg: Step2BConfig) -> list[float]:
+    headers = {
+        "Authorization": f"Bearer {cfg.auth_token}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "inputs": texts,
+        "parameters": {
+            "candidate_labels": [
+                "vendor related business email",
+                "non-vendor personal or automated email",
+            ],
+            "hypothesis_template": "This email is {}.",
+        },
+    }
+
+    r = SESSION.post(
+        cfg.endpoint,
+        headers=headers,
+        json=payload,
+        timeout=cfg.timeout_seconds,
+    )
+    r.raise_for_status()
+    data = r.json()
+
+    return [extract_vendor_probability_from_hf(d) for d in data]
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -449,7 +480,7 @@ def main() -> int:
     pre_dir = Path(args.prefiltered_dir).expanduser().resolve()
     cand_dir = Path(args.candidates_dir).expanduser().resolve()
     st_dir = Path(args.state_dir).expanduser().resolve()
-    registry_path = st_dir / "processing_registry.jsonl"
+    registry_path = st_dir / "processing_registry_step2b_vendor_scoring.jsonl"
     decision_log = st_dir / "step2b_vendor_scoring.jsonl"
 
     registry = load_registry(registry_path)
@@ -508,6 +539,8 @@ def main() -> int:
     records_seen = 0
     failed_legacy = 0  # maintain original variable name usage semantics in end return
 
+    batch_texts = []
+    batch_records = []
     for p in all_paths:
         records_seen += 1
 
@@ -567,7 +600,80 @@ def main() -> int:
 
         try:
             text = ultra_safe_cleanup_for_bert(build_input_text(email_obj, cfg))
-            prob = call_inference(text, cfg)
+
+            batch_texts.append(text)
+            batch_records.append((eid, email_obj, p, chash))
+
+            if len(batch_texts) < BATCH_SIZE:
+                continue
+
+            probs = call_inference_batch(batch_texts, cfg)
+
+            for prob, (eid, email_obj, p, chash) in zip(probs, batch_records):
+                label = "vendor" if prob >= cfg.threshold else "non_vendor"
+
+                append_jsonl(decision_log, {
+                    "email_id": eid,
+                    "vendor_probability": prob,
+                    "predicted_label": label,
+                    "threshold_used": cfg.threshold,
+                    "model_version": cfg.model_version,
+                    "timestamp": utc_now_iso(),
+                })
+
+                if label == "vendor":
+                    write_candidate_email(
+                        src_path=p,
+                        dst_path=shard_path(cand_dir, eid),
+                        email_obj=email_obj,
+                        prob=prob,
+                        cfg=cfg,
+                    )
+                    passed += 1
+                    output_written += 1
+
+                append_jsonl(registry_path, {
+                    "email_id": eid,
+                    "content_hash": chash,
+                    "last_completed_step": STEP,
+                    "model_versions": {"step2b_model_version": cfg.model_version},
+                    "updated_at": utc_now_iso(),
+                    "error": None,
+                })
+
+                registry[eid] = RegistryEntry({
+                    "email_id": eid,
+                    "content_hash": chash,
+                    "last_completed_step": STEP,
+                    "model_versions": {"step2b_model_version": cfg.model_version},
+                })
+
+                processed += 1
+
+                if processed % 10 == 0:
+                    logger.info(
+                        "Progress: processed=%d skipped=%d passed=%d failed=%d",
+                        processed, skipped, passed, failed_legacy
+                    )
+
+            # IMPORTANT: clear batch after processing
+            batch_texts.clear()
+            batch_records.clear()
+
+
+        except Exception as e:
+            failed += 1
+            failed_legacy += 1
+            failed_by_reason[FAIL_REASON_SCORING_EXCEPTION] += 1
+            # WARNING: recoverable per-record failure; include record identifier and reason
+            logger.warning("Error scoring email_id=%s: %s", eid, e, exc_info=logger.isEnabledFor(logging.DEBUG))
+
+
+    # Flush leftover batch at end (if any)
+    if batch_texts:
+        probs = call_inference_batch(batch_texts, cfg)
+
+        for prob, (eid, email_obj, p, chash) in zip(probs, batch_records):
             label = "vendor" if prob >= cfg.threshold else "non_vendor"
 
             append_jsonl(decision_log, {
@@ -605,20 +711,8 @@ def main() -> int:
                 "last_completed_step": STEP,
                 "model_versions": {"step2b_model_version": cfg.model_version},
             })
-            processed += 1
 
-            # Preserve existing INFO progress cadence (do not increase per-record INFO logging)
-            if processed % 10 == 0:
-                logger.info(
-                    "Progress: processed=%d skipped=%d passed=%d failed=%d",
-                    processed, skipped, passed, failed_legacy
-                )
-        except Exception as e:
-            failed += 1
-            failed_legacy += 1
-            failed_by_reason[FAIL_REASON_SCORING_EXCEPTION] += 1
-            # WARNING: recoverable per-record failure; include record identifier and reason
-            logger.warning("Error scoring email_id=%s: %s", eid, e, exc_info=logger.isEnabledFor(logging.DEBUG))
+            processed += 1
 
     # LOGGING ADDITION: total input accounted for invariant uses actual seen records (works even with early limit stop)
     total_input = records_seen
