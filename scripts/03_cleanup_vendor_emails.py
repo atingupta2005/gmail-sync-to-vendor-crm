@@ -234,7 +234,7 @@ def main() -> int:
     candidates_dir = Path(args.candidates_dir)
     output_dir = Path(args.output_dir)
     state_dir = Path(args.state_dir)
-    registry_path = state_dir / "processing_registry.jsonl"
+    registry_path = state_dir / "processing_registry_step3_cleanup.jsonl"
 
     registry = load_registry(registry_path)
 
