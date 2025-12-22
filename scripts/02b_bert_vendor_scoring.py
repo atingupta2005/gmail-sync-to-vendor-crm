@@ -38,6 +38,7 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+
 # ----------------------------
 # Config Loading
 # ----------------------------
@@ -58,6 +59,7 @@ def get_nested(d: Dict[str, Any], keys: list[str], default: Any = None) -> Any:
             return default
         cur = cur[k]
     return cur
+
 
 
 class Step2BConfig:
@@ -225,6 +227,30 @@ def build_input_text(email_obj: dict[str, Any], cfg: Step2BConfig) -> str:
     if len(text) > cfg.max_total_chars:
         text = text[:cfg.max_total_chars].rstrip() + " …"
     return text
+
+
+def ultra_safe_cleanup_for_bert(text: str, max_chars: int = 3500) -> str:
+    if not text:
+        return ""
+
+    original_len = len(text)
+
+    # Normalize whitespace only
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+
+    # Hard length cap (cost + latency protection)
+    if len(text) > max_chars:
+        LOG.debug(
+            "BERT input truncated: original_len=%d max_chars=%d",
+            original_len,
+            max_chars,
+        )
+        text = text[:max_chars].rstrip() + " …"
+
+    return text.strip()
+
 
 
 # ----------------------------
@@ -413,7 +439,7 @@ def main() -> int:
             continue
 
         try:
-            text = build_input_text(email_obj, cfg)
+            text = ultra_safe_cleanup_for_bert(build_input_text(email_obj, cfg))
             prob = call_inference(text, cfg)
             label = "vendor" if prob >= cfg.threshold else "non_vendor"
 

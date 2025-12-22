@@ -19,9 +19,12 @@ cd ~/gmail-sync-to-vendor-crm
 source venv/bin/activate
 
 python scripts/01_ingest_maildir_to_json.py \
-  --maildir-roots /home/atingupta2005/Mail/Gmail/Inbox /home/atingupta2005/Mail/Gmail/Sent \
+  --maildir-roots \
+    /home/atingupta2005/Mail/Gmail/Inbox \
+    /home/atingupta2005/Mail/Gmail/[Gmail]/Sent\ Mail \
   --output-dir data/emails_raw_json \
   --state-dir data/state
+
 
 # Terminal 3
 cd ~/gmail-sync-to-vendor-crm
@@ -84,3 +87,6 @@ find data/emails_raw_json -name "*.json" | wc -l
 find data/emails_prefiltered -name "*.json" | wc -l
 find data/emails_candidates -name "*.json" | wc -l
 find data/emails_cleaned -name "*.json" | wc -l
+
+chmod a+x scripts/status_check.sh
+./scripts/status_check.sh
