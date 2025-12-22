@@ -5,12 +5,15 @@ source venv/bin/activate
 
 chmod +x scripts/00_run_mbsync_retry.sh
 
-nohup scripts/00_run_mbsync_retry.sh > /dev/null 2>&1 &
+nohup bash scripts/00_run_mbsync_retry.sh >/dev/null 2>&1 &
+
+ps aux | grep mbsync | grep -v grep
+
 pgrep mbsync
 tail -f ~/mbsync.log
 
 ## Stop (Only if needed)
-# pkill -f run_mbsync_retry
+#pkill -f scripts/00_run_mbsync_retry.sh
 # pgrep mbsync
 
 
@@ -20,8 +23,14 @@ source venv/bin/activate
 
 python scripts/01_ingest_maildir_to_json.py \
   --maildir-roots \
-    /home/atingupta2005/Mail/Gmail/Inbox \
     /home/atingupta2005/Mail/Gmail/[Gmail]/Sent\ Mail \
+  --output-dir data/emails_raw_json \
+  --state-dir data/state
+
+
+python scripts/01_ingest_maildir_to_json.py \
+  --maildir-roots \
+    /home/atingupta2005/Mail/Gmail/Inbox \
   --output-dir data/emails_raw_json \
   --state-dir data/state
 

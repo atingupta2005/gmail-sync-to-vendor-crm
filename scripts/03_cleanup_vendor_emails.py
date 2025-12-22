@@ -16,7 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Tuple
 
-LOG = logging.getLogger("step3_cleanup")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True
+)
+logger = logging.getLogger("cleanup_vendor_emails")
+
 
 # -------------------------
 # Utility helpers
@@ -211,8 +218,6 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-
     candidates_dir = Path(args.candidates_dir)
     output_dir = Path(args.output_dir)
     state_dir = Path(args.state_dir)
@@ -287,9 +292,9 @@ def main() -> int:
                     "timestamp": utc_now(),
                 },
             )
-            LOG.error("cleanup failed for %s: %s", json_path, e)
+            logger.error("cleanup failed for %s: %s", json_path, e)
 
-    LOG.info(
+    logger.info(
         "Done: processed=%d skipped=%d failed=%d",
         processed,
         skipped,
@@ -302,4 +307,4 @@ if __name__ == "__main__":
     while True:
         main()
         time.sleep(300)
-        LOG.warning("Cleanup: sleeping for 5 minutes")
+        logger.warning("Cleanup: sleeping for 5 minutes")

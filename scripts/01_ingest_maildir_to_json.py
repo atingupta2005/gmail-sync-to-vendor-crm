@@ -19,7 +19,12 @@ from typing import Dict, Any, Optional, List
 
 from registry import append_registry_entry
 
-logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True
+)
 logger = logging.getLogger("ingest")
 
 

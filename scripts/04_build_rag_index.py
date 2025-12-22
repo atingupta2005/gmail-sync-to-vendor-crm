@@ -2,13 +2,24 @@ from dotenv import load_dotenv
 from datetime import datetime
 from typing import List, Dict
 import os
-
+import logging
 from functools import wraps
 from time import perf_counter
 
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True
+)
+logger = logging.getLogger("ingest")
+
+
+
 def log_progress(processed, total_vectors, every=50):
     if processed % every == 0:
-        print(
+        logger.info(
             f"[PROGRESS] emails={processed} "
             f"vectors={total_vectors} "
             f"time={datetime.utcnow().isoformat()}Z"
@@ -18,7 +29,7 @@ def debug_step(name):
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            print(f"[DEBUG] → {name}.start")
+            logger.debug(f"[DEBUG] → {name}.start")
             t0 = perf_counter()
             result = fn(*args, **kwargs)
             dt = perf_counter() - t0
@@ -30,7 +41,7 @@ def debug_step(name):
             else:
                 size = result
 
-            print(f"[DEBUG] ← {name}.end | result={size} | {dt:.2f}s")
+            logger.info(f"[DEBUG] ← {name}.end | result={size} | {dt:.2f}s")
             return result
         return wrapper
     return decorator
@@ -228,7 +239,7 @@ def upsert_vectors(
     buffer.extend(records)
 
     if len(buffer) >= batch_size:
-        print("UPSERT FLUSH:", len(buffer))
+        logger.info("UPSERT FLUSH:", len(buffer))
         index.upsert(vectors=buffer, namespace="emails")
         buffer.clear()
 
@@ -356,7 +367,7 @@ def process_all_cleaned_emails(
 
     for path, cleaned_email in iter_cleaned_emails(cleaned_dir):
         if processed_emails % 100 == 0:
-            print("FOUND CLEANED EMAIL:", path)
+            logger.info("FOUND CLEANED EMAIL:", path)
 
         email_id = cleaned_email["email_id"]
         content_hash = cleaned_email.get("content_hash")
@@ -412,7 +423,7 @@ def process_all_cleaned_emails(
             continue
 
     if upsert_buffer:
-        print("FINAL UPSERT FLUSH:", len(upsert_buffer))
+        logger.info("FINAL UPSERT FLUSH:", len(upsert_buffer))
         pinecone_index.upsert(vectors=upsert_buffer, namespace="emails")
         upsert_buffer.clear()
 
@@ -482,10 +493,10 @@ def main():
         index_name=pinecone_cfg["index_name"],
     )
 
-    print("Before processing: INDEX STATS:")
-    print("--------------------------------")
-    print(index.describe_index_stats())
-    print("--------------------------------")
+    logger.info("Before processing: INDEX STATS:")
+    logger.info("--------------------------------")
+    logger.info(index.describe_index_stats())
+    logger.info("--------------------------------")
 
     total = process_all_cleaned_emails(
         cleaned_dir=Path(args.cleaned_dir),
@@ -494,17 +505,17 @@ def main():
         registry_path=Path("data/state/processing_registry.jsonl"),
     )
 
-    print(f"Indexed {total} vectors")
+    logger.info(f"Indexed {total} vectors")
     
-    print("After processing: INDEX STATS:")
-    print("--------------------------------")
-    print(index.describe_index_stats())
-    print("--------------------------------")
+    logger.info("After processing: INDEX STATS:")
+    logger.info("--------------------------------")
+    logger.info(index.describe_index_stats())
+    logger.info("--------------------------------")
 
 
 if __name__ == "__main__":
     while True:
         main()
         time.sleep(300)
-        print("RAG Index: sleeping for 5 minutes")
+        logger.info("RAG Index: sleeping for 5 minutes")
 

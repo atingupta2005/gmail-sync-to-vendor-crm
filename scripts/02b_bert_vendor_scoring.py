@@ -31,8 +31,13 @@ from dotenv import load_dotenv
 
 import requests
 
-LOG = logging.getLogger("step2b_vendor_scoring")
-
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True
+)
+logger = logging.getLogger("step2b_vendor_scoring")
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -72,7 +77,7 @@ class Step2BConfig:
         embedding_cfg = dict(cfg["embedding"])
         self.auth_token = os.environ["HF_TOKEN"]
         
-        LOG.info("HF auth token present: %s", bool(self.auth_token))
+        logger.info("HF auth token present: %s", bool(self.auth_token))
 
         self.model_version = str(get_nested(cfg, ["bert", "model_version"], "")).strip()
         if not self.model_version:
@@ -242,7 +247,7 @@ def ultra_safe_cleanup_for_bert(text: str, max_chars: int = 3500) -> str:
 
     # Hard length cap (cost + latency protection)
     if len(text) > max_chars:
-        LOG.debug(
+        logger.debug(
             "BERT input truncated: original_len=%d max_chars=%d",
             original_len,
             max_chars,
@@ -397,15 +402,13 @@ def main() -> int:
     ap.add_argument("--config", default="config/config.yaml")
     ap.add_argument("--link-method", default="hardlink", choices=["hardlink", "symlink", "copy"])
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--log-level", default="INFO")
+    ap.add_argument("--log-level", default="DEBUG")
     args = ap.parse_args()
-
-    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
 
     cfg_yaml = _load_yaml_minimal(Path(args.config))
     cfg = Step2BConfig(cfg_yaml, args.link_method)
 
-    LOG.info("Vendor scoring started (model=%s)", cfg.model_version)
+    logger.info("Vendor scoring started (model=%s)", cfg.model_version)
 
 
     pre_dir = Path(args.prefiltered_dir).expanduser().resolve()
@@ -479,13 +482,13 @@ def main() -> int:
             })
             processed += 1
             if processed % 10 == 0:
-                LOG.info("Progress: processed=%d skipped=%d passed=%d failed=%d",
+                logger.info("Progress: processed=%d skipped=%d passed=%d failed=%d",
                         processed, skipped, passed, failed)
         except Exception as e:
             failed += 1
             logging.error("error scoring %s: %s", eid, e)
 
-    LOG.info("Done: processed=%d skipped=%d passed=%d failed=%d", processed, skipped, passed, failed)
+    logger.info("Done: processed=%d skipped=%d passed=%d failed=%d", processed, skipped, passed, failed)
     return 0 if failed == 0 else 1
 
 
@@ -495,4 +498,4 @@ if __name__ == "__main__":
     while True:
         main()
         time.sleep(300)
-        LOG.info("Vendor Scoring: sleeping for 5 minutes")
+        logger.info("Vendor Scoring: sleeping for 5 minutes")
