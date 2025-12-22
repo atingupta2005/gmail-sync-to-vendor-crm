@@ -178,10 +178,10 @@ def process_maildir(
             if prev:
                 skipped_total += 1
                 skipped_reasons["fast_key_hit"] += 1
-                logger.debug(
-                    "record_skipped reason=fast_key_hit path=%s",
-                    fpath,
-                )
+                # logger.debug(
+                #     "record_skipped reason=fast_key_hit path=%s",
+                #     fpath,
+                # )
                 continue
 
             raw_bytes = fpath.read_bytes()
@@ -192,11 +192,11 @@ def process_maildir(
             if prev and prev.get("content_hash") == content_hash:
                 skipped_total += 1
                 skipped_reasons["content_hash_match"] += 1
-                logger.debug(
-                    "record_skipped reason=content_hash_match email_id=%s path=%s",
-                    email_id,
-                    fpath,
-                )
+                # logger.debug(
+                #     "record_skipped reason=content_hash_match email_id=%s path=%s",
+                #     email_id,
+                #     fpath,
+                # )
                 continue
 
             out = {
