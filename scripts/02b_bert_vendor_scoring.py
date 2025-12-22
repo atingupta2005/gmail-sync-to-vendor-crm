@@ -167,6 +167,29 @@ def should_skip(entry: Optional[RegistryEntry], content_hash: str, model_version
     return True
 
 
+def ultra_safe_cleanup_for_bert(text: str, max_chars: int = 3500) -> str:
+    if not text:
+        return ""
+
+    original_len = len(text)
+
+    # Normalize whitespace only
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+
+    # Hard length cap (cost + latency protection)
+    if len(text) > max_chars:
+        logger.debug(
+            "BERT input truncated: original_len=%d max_chars=%d",
+            original_len,
+            max_chars,
+        )
+        text = text[:max_chars].rstrip() + " …"
+
+    return text.strip()
+
+
 # ----------------------------
 # Main
 # ----------------------------

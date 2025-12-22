@@ -189,7 +189,7 @@ def process(
             if not email_id:
                 skipped_total += 1
                 skipped_reasons["missing_email_id"] += 1
-                logger.debug("record_skipped reason=missing_email_id path=%s", f)
+                #logger.debug("record_skipped reason=missing_email_id path=%s", f)
                 continue
 
             registry_entry = registry_cache.get(email_id)
@@ -200,7 +200,7 @@ def process(
             ):
                 skipped_total += 1
                 skipped_reasons["unchanged"] += 1
-                logger.debug("record_skipped reason=unchanged email_id=%s", email_id)
+                #logger.debug("record_skipped reason=unchanged email_id=%s", email_id)
                 continue
 
             score, reasons = score_email(email, config)
