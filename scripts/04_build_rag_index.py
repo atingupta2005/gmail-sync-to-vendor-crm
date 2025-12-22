@@ -25,15 +25,52 @@ logging.basicConfig(
 logger = logging.getLogger("ingest")
 
 # -------------------------------------------------------------------
+# Pipeline logging constants (safe + bounded volume)
+# -------------------------------------------------------------------
+
+# Heartbeat/progress log frequency for the main loop (bounded INFO volume).
+# Increase this number to reduce log volume; decrease for more granular monitoring.
+PROGRESS_EVERY_RECORDS = 200
+
+# INFO log frequency for discovered files (kept low + bounded).
+FOUND_EMAIL_LOG_EVERY = 1000
+
+# -------------------------------------------------------------------
 # Utility logging helpers
 # -------------------------------------------------------------------
 
-def log_progress(processed: int, total_vectors: int, every: int = 50) -> None:
-    if processed % every == 0:
+def _fmt_skip_breakdown(skipped_by_reason: Dict[str, int]) -> str:
+    if not skipped_by_reason:
+        return "{}"
+    # Stable ordering to keep logs diff-friendly
+    items = ", ".join(f"{k}={skipped_by_reason[k]}" for k in sorted(skipped_by_reason))
+    return "{" + items + "}"
+
+def _invariant_ok(total_input: int, processed: int, skipped_total: int, failed: int) -> bool:
+    return total_input == (processed + skipped_total + failed)
+
+def log_progress(
+    *,
+    seen: int,
+    total_input: int,
+    processed: int,
+    failed: int,
+    skipped_total: int,
+    skipped_by_reason: Dict[str, int],
+    output_written: int,
+    every: int = PROGRESS_EVERY_RECORDS,
+) -> None:
+    # Periodic heartbeat only (bounded INFO volume)
+    if seen > 0 and (seen % every == 0):
         logger.info(
-            "[PROGRESS] emails=%s vectors=%s time=%sZ",
+            "[PROGRESS] seen=%s/%s processed=%s skipped=%s failed=%s output_written=%s skipped_breakdown=%s time=%sZ",
+            seen,
+            total_input,
             processed,
-            total_vectors,
+            skipped_total,
+            failed,
+            output_written,
+            _fmt_skip_breakdown(skipped_by_reason),
             datetime.utcnow().isoformat(),
         )
 
@@ -46,6 +83,7 @@ def debug_step(name):
             result = fn(*args, **kwargs)
             dt = perf_counter() - t0
             size = len(result) if isinstance(result, list) else result
+            # NOTE: This is INFO today (existing behavior) and intentionally left unchanged.
             logger.info("[DEBUG] ← %s.end | result=%s | %.2fs", name, size, dt)
             return result
         return wrapper
@@ -277,21 +315,97 @@ def process_all_cleaned_emails(
     registry_path: Path,
 ) -> int:
 
+    step_started_at = perf_counter()
+
+    # Counters required by prompt
+    total_input = 0
+    processed = 0
+    failed = 0
+    skipped_total = 0
+    skipped_by_reason: Dict[str, int] = {}
+    output_written = 0  # number of vector records produced (and scheduled/written via upsert)
+
+    # Existing locals (kept to avoid any behavioral changes)
     upsert_buffer: List[Dict] = []
     registry = load_registry(registry_path)
     processed_emails = 0
     total_vectors = 0
 
+    # Determine total_input up front so logs can be audited from logs alone
+    # (This is not a logic/control-flow change; it only enumerates the same generator once for counting.)
+    try:
+        total_input = sum(1 for _ in cleaned_dir.rglob("*.json"))
+    except Exception:
+        logger.exception("Failed to count input files under cleaned_dir=%s", cleaned_dir)
+        # Keep going; total_input may remain 0/partial
+
+    logger.info(
+        "[STEP START] process_all_cleaned_emails cleaned_dir=%s total_input=%s registry_path=%s model_version=%s endpoint=%s progress_every=%s found_log_every=%s",
+        str(cleaned_dir),
+        total_input,
+        str(registry_path),
+        embedding_cfg.get("model_version"),
+        embedding_cfg.get("endpoint"),
+        PROGRESS_EVERY_RECORDS,
+        FOUND_EMAIL_LOG_EVERY,
+    )
+
+    seen = 0
+
     for path, cleaned_email in iter_cleaned_emails(cleaned_dir):
-        if processed_emails % 100 == 0:
+        seen += 1
+
+        if seen % FOUND_EMAIL_LOG_EVERY == 0:
+            # Keep low-volume: one log per N discovered inputs
             logger.info("FOUND CLEANED EMAIL: %s", path)
 
-        email_id = cleaned_email["email_id"]
+        # Validate record identifier availability without logging payload/PII
+        email_id = None
+        try:
+            email_id = cleaned_email["email_id"]
+        except Exception:
+            failed += 1
+            logger.error(
+                "Unrecoverable record: missing email_id (cannot proceed) path=%s seen=%s/%s",
+                str(path),
+                seen,
+                total_input,
+            )
+            log_progress(
+                seen=seen,
+                total_input=total_input,
+                processed=processed,
+                failed=failed,
+                skipped_total=skipped_total,
+                skipped_by_reason=skipped_by_reason,
+                output_written=output_written,
+            )
+            continue
+
         content_hash = cleaned_email.get("content_hash")
         model_version = embedding_cfg["model_version"]
 
         reg = registry.get(email_id)
         if reg and reg.get("content_hash") == content_hash and reg.get("embedding_model_version") == model_version:
+            skipped_total += 1
+            reason = "already_indexed_same_hash_and_model"
+            skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
+            logger.debug(
+                "SKIP email_id=%s reason=%s seen=%s/%s",
+                email_id,
+                reason,
+                seen,
+                total_input,
+            )
+            log_progress(
+                seen=seen,
+                total_input=total_input,
+                processed=processed,
+                failed=failed,
+                skipped_total=skipped_total,
+                skipped_by_reason=skipped_by_reason,
+                output_written=output_written,
+            )
             continue
 
         try:
@@ -303,6 +417,21 @@ def process_all_cleaned_emails(
                 upsert_buffer=upsert_buffer,
             )
 
+            if n == 0:
+                skipped_total += 1
+                reason = "no_chunks_or_no_vectors_produced"
+                skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
+                logger.debug(
+                    "SKIP email_id=%s reason=%s seen=%s/%s",
+                    email_id,
+                    reason,
+                    seen,
+                    total_input,
+                )
+            else:
+                processed += 1
+                output_written += n
+
             append_registry(
                 registry_path,
                 {
@@ -313,16 +442,81 @@ def process_all_cleaned_emails(
                 },
             )
 
+            # Existing counters (kept)
             processed_emails += 1
             total_vectors += n
-            log_progress(processed_emails, total_vectors)
+
+            log_progress(
+                seen=seen,
+                total_input=total_input,
+                processed=processed,
+                failed=failed,
+                skipped_total=skipped_total,
+                skipped_by_reason=skipped_by_reason,
+                output_written=output_written,
+            )
 
         except Exception as e:
+            # Recoverable per-record failure: log record identifier + reason, no payload
+            failed += 1
+            logger.warning(
+                "Per-record failure email_id=%s path=%s error=%s",
+                email_id,
+                str(path),
+                e,
+            )
             logger.exception("Failed email %s", email_id)
+
+            log_progress(
+                seen=seen,
+                total_input=total_input,
+                processed=processed,
+                failed=failed,
+                skipped_total=skipped_total,
+                skipped_by_reason=skipped_by_reason,
+                output_written=output_written,
+            )
 
     if upsert_buffer:
         logger.info("FINAL UPSERT FLUSH: %s", len(upsert_buffer))
-        pinecone_index.upsert(vectors=upsert_buffer, namespace="emails")
+        try:
+            pinecone_index.upsert(vectors=upsert_buffer, namespace="emails")
+        except Exception:
+            # Unrecoverable output failure
+            logger.exception("Unrecoverable failure: final upsert flush failed (buffer_size=%s)", len(upsert_buffer))
+            raise
+
+    elapsed_s = perf_counter() - step_started_at
+
+    invariant_ok = _invariant_ok(total_input, processed, skipped_total, failed)
+
+    logger.info(
+        "[STEP SUMMARY] total_input=%s processed=%s skipped_total=%s skipped_breakdown=%s failed=%s output_written=%s invariant_ok=%s elapsed_s=%.3f",
+        total_input,
+        processed,
+        skipped_total,
+        _fmt_skip_breakdown(skipped_by_reason),
+        failed,
+        output_written,
+        invariant_ok,
+        elapsed_s,
+    )
+
+    if not invariant_ok:
+        logger.error(
+            "Invariant violation: total_input(%s) != processed(%s)+skipped(%s)+failed(%s)",
+            total_input,
+            processed,
+            skipped_total,
+            failed,
+        )
+
+    logger.info(
+        "[LOGGING PERFORMANCE] To improve throughput: (1) disable DEBUG logs in production hot paths (skip decisions and internal diagnostics are DEBUG), "
+        "(2) increase PROGRESS_EVERY_RECORDS=%s to reduce heartbeat volume, "
+        "(3) keep per-record INFO logs out of loops (this step uses periodic INFO only).",
+        PROGRESS_EVERY_RECORDS,
+    )
 
     return total_vectors
 

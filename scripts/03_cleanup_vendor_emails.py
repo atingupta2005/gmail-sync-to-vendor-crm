@@ -16,6 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Tuple
 
+# -------------------------
+# Logging setup
+# -------------------------
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s",
@@ -24,6 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("cleanup_vendor_emails")
 
+# Progress heartbeat frequency (safe to increase to reduce log volume)
+PROGRESS_EVERY_N = 500
 
 # -------------------------
 # Utility helpers
@@ -101,6 +107,7 @@ def remove_quoted_and_forwarded(text: str) -> Tuple[str, bool]:
     for pat in FORWARDED_MARKERS + QUOTED_REPLY_PATTERNS:
         split = pat.split(text, maxsplit=1)
         if len(split) > 1:
+            logger.debug("Removing quoted/forwarded block")
             text = split[0]
 
     return text.strip(), text != original
@@ -113,6 +120,7 @@ def split_signature(text: str) -> Tuple[str, str, bool]:
     for pat in SIGNATURE_DELIMITERS:
         parts = pat.split(text, maxsplit=1)
         if len(parts) > 1:
+            logger.debug("Signature delimiter detected")
             body = parts[0].strip()
             signature = parts[1].strip()
             return body, signature, True
@@ -130,7 +138,9 @@ def remove_disclaimer_safely(text: str) -> Tuple[str, bool]:
         if idx != -1:
             tail = text[idx:]
             if not contains_contact_info(tail):
+                logger.debug("Removing disclaimer block without contact info")
                 return text[:idx].strip(), True
+            logger.debug("Disclaimer retained due to contact info")
     return text, False
 
 
@@ -143,6 +153,7 @@ def normalize_whitespace(text: str) -> str:
 def truncate_body_only(body: str, max_chars: int = 2000) -> str:
     if len(body) <= max_chars:
         return body
+    logger.debug("Truncating body text to max_chars=%d", max_chars)
     cut = body[:max_chars]
     last_period = cut.rfind(".")
     if last_period > 200:
@@ -211,6 +222,8 @@ def append_registry(registry_path: Path, record: Dict[str, Any]) -> None:
 # -------------------------
 
 def main() -> int:
+    start_ts = time.time()
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--candidates-dir", required=True)
     ap.add_argument("--output-dir", required=True)
@@ -225,10 +238,25 @@ def main() -> int:
 
     registry = load_registry(registry_path)
 
-    processed = skipped = failed = 0
+    processed = 0
+    failed = 0
+    skipped_total = 0
+    skipped_already_processed = 0
+    output_written = 0
+    total_input = 0
+
+    logger.info(
+        "STEP 3 START: candidates_dir=%s output_dir=%s limit=%s",
+        candidates_dir,
+        output_dir,
+        args.limit or "none",
+    )
 
     for json_path in candidates_dir.rglob("*.json"):
+        total_input += 1
+
         if args.limit and processed >= args.limit:
+            logger.info("Processing limit reached (%d); stopping early", args.limit)
             break
 
         try:
@@ -240,7 +268,9 @@ def main() -> int:
 
             reg = registry.get(email_id)
             if reg and reg.get("last_completed_step") == "step3_cleanup" and reg.get("content_hash") == content_hash:
-                skipped += 1
+                skipped_total += 1
+                skipped_already_processed += 1
+                logger.debug("Skipping %s: already processed with same content_hash", email_id)
                 continue
 
             raw_text = email.get("body", {}).get("raw_text") or ""
@@ -269,6 +299,8 @@ def main() -> int:
             with out_path.open("w", encoding="utf-8") as f:
                 json.dump(output, f, ensure_ascii=False, indent=2)
 
+            output_written += 1
+
             append_registry(
                 registry_path,
                 {
@@ -283,6 +315,7 @@ def main() -> int:
 
         except Exception as e:
             failed += 1
+            logger.warning("Recoverable failure for %s: %s", json_path, e)
             append_registry(
                 registry_path,
                 {
@@ -292,19 +325,41 @@ def main() -> int:
                     "timestamp": utc_now(),
                 },
             )
-            logger.error("cleanup failed for %s: %s", json_path, e)
+
+        if total_input % PROGRESS_EVERY_N == 0:
+            logger.info(
+                "Progress: seen=%d processed=%d skipped=%d (already_processed=%d) failed=%d",
+                total_input,
+                processed,
+                skipped_total,
+                skipped_already_processed,
+                failed,
+            )
+
+    elapsed = time.time() - start_ts
+    invariant_ok = total_input == processed + skipped_total + failed
 
     logger.info(
-        "Done: processed=%d skipped=%d failed=%d",
+        "STEP 3 COMPLETE: total_input=%d processed=%d skipped=%d failed=%d output_written=%d invariant_ok=%s elapsed_sec=%.2f",
+        total_input,
         processed,
-        skipped,
+        skipped_total,
         failed,
+        output_written,
+        invariant_ok,
+        elapsed,
     )
+
+    logger.info(
+        "Logging performance notes: DEBUG logs inside the hot loop are safe to disable. "
+        "Increase PROGRESS_EVERY_N to reduce log volume during large runs."
+    )
+
     return 0
 
 
 if __name__ == "__main__":
     while True:
         main()
+        logger.warning("Cleanup job sleeping for 5 minutes (heartbeat)")
         time.sleep(300)
-        logger.warning("Cleanup: sleeping for 5 minutes")

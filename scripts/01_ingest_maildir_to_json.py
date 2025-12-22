@@ -16,6 +16,7 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from collections import Counter
 
 from registry import append_registry_entry
 
@@ -27,6 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ingest")
 
+# ---------- logging config ----------
+PROGRESS_EVERY_N = 500  # INFO heartbeat frequency (safe to increase)
 
 # ---------- helpers ----------
 
@@ -123,6 +126,16 @@ def process_maildir(
     only_prefix: Optional[str] = None,
     dry_run: bool = False,
 ):
+    step_start = time.monotonic()
+
+    # ----- counters -----
+    total_input = 0
+    processed = 0
+    failed = 0
+    skipped_total = 0
+    skipped_reasons = Counter()
+    output_written = 0
+
     files: List[Path] = []
 
     for sub in ("cur", "new"):
@@ -135,22 +148,40 @@ def process_maildir(
                     continue
                 files.append(f)
 
-
     files.sort()
-    logger.info("Found %d message files in %s", len(files), maildir_root)
+
+    logger.info(
+        "step_start step=step1_ingest maildir=%s discovered_files=%d dry_run=%s limit=%s",
+        maildir_root,
+        len(files),
+        dry_run,
+        limit or "none",
+    )
 
     if limit:
         files = files[:limit]
 
-    processed = 0
+    total_expected = len(files)
+    logger.info(
+        "step_input step=step1_ingest total_input_expected=%d",
+        total_expected,
+    )
 
-    for fpath in files:
+    for idx, fpath in enumerate(files, start=1):
+        total_input += 1
+
         try:
             stat = fpath.stat()
             fast_key = f"{fpath.name}:{stat.st_mtime}:{stat.st_size}"
 
             prev = registry_cache.get(fast_key)
             if prev:
+                skipped_total += 1
+                skipped_reasons["fast_key_hit"] += 1
+                logger.debug(
+                    "record_skipped reason=fast_key_hit path=%s",
+                    fpath,
+                )
                 continue
 
             raw_bytes = fpath.read_bytes()
@@ -159,6 +190,13 @@ def process_maildir(
 
             prev = registry_cache.get(email_id)
             if prev and prev.get("content_hash") == content_hash:
+                skipped_total += 1
+                skipped_reasons["content_hash_match"] += 1
+                logger.debug(
+                    "record_skipped reason=content_hash_match email_id=%s path=%s",
+                    email_id,
+                    fpath,
+                )
                 continue
 
             out = {
@@ -191,11 +229,18 @@ def process_maildir(
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                 })
                 registry_cache[email_id] = {"content_hash": content_hash}
+                output_written += 1
 
             processed += 1
 
         except Exception as e:
-            logger.warning("Failed parsing %s: %s", fpath, e)
+            failed += 1
+            logger.warning(
+                "record_failed step=step1_ingest path=%s error=%s",
+                fpath,
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
 
             if not dry_run:
                 failed_path = output_dir / folder_label / "failed" / f"{fpath.name}.json"
@@ -210,7 +255,45 @@ def process_maildir(
                     },
                 })
 
-    logger.info("Processed %d emails", processed)
+        if total_input % PROGRESS_EVERY_N == 0:
+            logger.info(
+                "step_progress step=step1_ingest seen=%d/%d processed=%d skipped=%d failed=%d skipped_breakdown=%s",
+                total_input,
+                total_expected,
+                processed,
+                skipped_total,
+                failed,
+                dict(skipped_reasons),
+            )
+
+    elapsed = time.monotonic() - step_start
+    invariant_ok = total_input == processed + skipped_total + failed
+
+    logger.info(
+        "step_summary step=step1_ingest total_input=%d processed=%d skipped_total=%d failed=%d output_written=%d skipped_breakdown=%s invariant_ok=%s elapsed_s=%.2f",
+        total_input,
+        processed,
+        skipped_total,
+        failed,
+        output_written,
+        dict(skipped_reasons),
+        invariant_ok,
+        elapsed,
+    )
+
+    if not invariant_ok:
+        logger.error(
+            "step_invariant_violation step=step1_ingest lhs_total_input=%d rhs_sum=%d",
+            total_input,
+            processed + skipped_total + failed,
+        )
+
+    logger.info(
+        "logging_hints step=step1_ingest "
+        "Disable DEBUG to remove per-record diagnostics; "
+        "increase PROGRESS_EVERY_N to reduce INFO volume; "
+        "stack traces only appear when DEBUG is enabled."
+    )
 
 
 # ---------- CLI ----------
@@ -229,7 +312,6 @@ def main():
     registry_path = Path(args.state_dir) / "processing_registry.jsonl"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # load registry ONCE
     registry_cache: Dict[str, Dict[str, Any]] = {}
     if registry_path.exists():
         with registry_path.open() as fh:
@@ -257,5 +339,5 @@ def main():
 if __name__ == "__main__":
     while True:
         main()
-        logger.warning("Ingest: sleeping for 5 minutes")
+        logger.warning("Ingest idle: sleeping for 5 minutes")
         time.sleep(300)

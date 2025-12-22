@@ -12,6 +12,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from collections import Counter
 
 try:
     import yaml
@@ -27,6 +28,9 @@ logging.basicConfig(
     force=True
 )
 logger = logging.getLogger("prefilter2a")
+
+# ---------- logging config ----------
+PROGRESS_EVERY_N = 500  # INFO heartbeat frequency
 
 
 def load_config(path: Optional[str]) -> Dict[str, Any]:
@@ -62,12 +66,9 @@ def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str
     subject = (email.get("headers", {}).get("Subject") or "").lower()
     body = (email.get("body", {}).get("raw_text") or "").lower()[:5000]
 
-    # ---- POSITIVE KEYWORDS ----
     for group_name, group in pre.get("positive_keywords", {}).items():
         weight = int(group.get("weight", 0))
-        terms = group.get("terms", [])
-
-        for term in terms:
+        for term in group.get("terms", []):
             t = term.lower()
             if t in subject:
                 score += int(weight * subject_weight)
@@ -75,32 +76,25 @@ def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str
             elif t in body:
                 score += int(weight * body_weight)
                 reasons.append(f"{group_name}:body:{term}")
-
-            # ✅ EARLY EXIT (safe)
             if score >= threshold:
                 return score, reasons
 
-    # ---- ATTACHMENTS ----
     att_cfg = pre.get("attachments", {})
     mime = email.get("mime_meta", {})
     if mime.get("has_attachments"):
         score += int(att_cfg.get("has_attachment_weight", 0))
         reasons.append("attachment:present")
-
         if score >= threshold:
             return score, reasons
-
         for att in mime.get("attachments", []):
             fname = (att.get("filename") or "").lower()
             for kw in att_cfg.get("filename_keywords", []):
                 if kw.lower() in fname:
                     score += int(att_cfg.get("filename_keyword_weight", 0))
                     reasons.append(f"attachment:filename:{kw}")
-
                     if score >= threshold:
                         return score, reasons
 
-    # ---- NEGATIVE KEYWORDS ----
     for group_name, group in pre.get("negative_keywords", {}).items():
         weight = int(group.get("weight", 0))
         for term in group.get("terms", []):
@@ -110,7 +104,6 @@ def score_email(email: Dict[str, Any], config: Dict[str, Any]) -> (int, List[str
                 reasons.append(f"negative:{group_name}:{term}")
 
     return score, reasons
-
 
 
 def ensure_dir(path: str) -> None:
@@ -124,13 +117,28 @@ def atomic_copy(src: Path, dst: Path) -> None:
     tmp.replace(dst)
 
 
+def process(
+    input_dir: Path,
+    output_dir: Path,
+    registry_path: str,
+    decision_log_path: Path,
+    config: Dict[str, Any],
+    limit: int = 0,
+    only_prefix: Optional[str] = None,
+    dry_run: bool = False,
+):
+    step_start = time.monotonic()
 
-def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_path: Path, config: Dict[str, Any], limit: int = 0, only_prefix: Optional[str] = None, dry_run: bool = False):
-    # gather files
-# gather files (mailbox -> shard -> email.json)
-    # ---- LOAD REGISTRY ONCE (performance critical) ----
+    # ---------- counters ----------
+    total_input = 0
+    processed = 0
+    failed = 0
+    skipped_total = 0
+    skipped_reasons = Counter()
+    output_written = 0
+
+    # ---------- registry ----------
     registry_cache: Dict[str, Dict[str, Any]] = {}
-
     if os.path.exists(registry_path):
         with open(registry_path, "r", encoding="utf-8") as fh:
             for line in fh:
@@ -141,16 +149,14 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
                 except Exception:
                     continue
 
+    # ---------- gather files ----------
     files: List[Path] = []
-
     for mailbox_dir in input_dir.iterdir():
         if not mailbox_dir.is_dir():
             continue
-
         for shard_dir in mailbox_dir.iterdir():
             if not shard_dir.is_dir():
                 continue
-
             for f in shard_dir.iterdir():
                 if f.is_file() and f.suffix == ".json":
                     if only_prefix and not f.name.startswith(only_prefix):
@@ -158,76 +164,142 @@ def process(input_dir: Path, output_dir: Path, registry_path: str, decision_log_
                     files.append(f)
 
     files.sort()
-    logger.debug("Prefilter: found %d candidate files", len(files))
     if limit and limit > 0:
         files = files[:limit]
 
+    total_expected = len(files)
     threshold = int(config.get("prefilter", {}).get("threshold", 5))
-    processed = 0
-    for f in files:
+
+    logger.info(
+        "step_start step=step2a_prefilter input_dir=%s total_input_expected=%d threshold=%d dry_run=%s limit=%s",
+        input_dir,
+        total_expected,
+        threshold,
+        dry_run,
+        limit or "none",
+    )
+
+    for idx, f in enumerate(files, start=1):
+        total_input += 1
         try:
             email = load_email_json(f)
             email_id = email.get("email_id")
             content_hash = email.get("content_hash")
+
             if not email_id:
-                logger.warning("Skipping file without email_id: %s", f)
+                skipped_total += 1
+                skipped_reasons["missing_email_id"] += 1
+                logger.debug("record_skipped reason=missing_email_id path=%s", f)
                 continue
 
             registry_entry = registry_cache.get(email_id)
-            if registry_entry and registry_entry.get("content_hash") == content_hash and registry_entry.get("last_completed_step") == "step2a_prefilter":
-                logger.debug("Skipping unchanged %s", email_id)
+            if (
+                registry_entry
+                and registry_entry.get("content_hash") == content_hash
+                and registry_entry.get("last_completed_step") == "step2a_prefilter"
+            ):
+                skipped_total += 1
+                skipped_reasons["unchanged"] += 1
+                logger.debug("record_skipped reason=unchanged email_id=%s", email_id)
                 continue
 
             score, reasons = score_email(email, config)
-
             passed = score >= threshold
+
             decision = {
                 "email_id": email_id,
                 "score": score,
                 "passed": passed,
                 "reasons": reasons,
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.utcnow().isoformat() + "Z",
             }
 
             if dry_run:
-                logger.debug("[dry-run] %s -> score=%d passed=%s reasons=%s", email_id, score, passed, reasons)
+                logger.debug(
+                    "[dry-run] decision email_id=%s score=%d passed=%s",
+                    email_id,
+                    score,
+                    passed,
+                )
             else:
-                # write decision log
                 ensure_dir(str(decision_log_path.parent))
                 with open(decision_log_path, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(decision, ensure_ascii=False) + "\n")
 
-                # if passed, copy to output_dir preserving subdir
                 if passed:
                     sub = email_id[:2]
                     dst = output_dir / sub / f"{email_id}.json"
                     atomic_copy(f, dst)
+                    output_written += 1
 
-                # update registry
                 append_registry_entry(registry_path, {
                     "email_id": email_id,
                     "content_hash": content_hash,
                     "last_completed_step": "step2a_prefilter",
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                 })
-                logger.debug("Processed %s -> score=%d passed=%s", email_id, score, passed)
 
             processed += 1
+
         except Exception as e:
-            logger.exception("Failed to prefilter %s: %s", f, e)
-    logger.warning("Prefilter processed %d files", processed)
+            failed += 1
+            logger.warning(
+                "record_failed step=step2a_prefilter path=%s error=%s",
+                f,
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+
+        if total_input % PROGRESS_EVERY_N == 0:
+            logger.info(
+                "step_progress step=step2a_prefilter seen=%d/%d processed=%d skipped=%d failed=%d skipped_breakdown=%s",
+                total_input,
+                total_expected,
+                processed,
+                skipped_total,
+                failed,
+                dict(skipped_reasons),
+            )
+
+    elapsed = time.monotonic() - step_start
+    invariant_ok = total_input == processed + skipped_total + failed
+
+    logger.info(
+        "step_summary step=step2a_prefilter total_input=%d processed=%d skipped_total=%d failed=%d output_written=%d skipped_breakdown=%s invariant_ok=%s elapsed_s=%.2f",
+        total_input,
+        processed,
+        skipped_total,
+        failed,
+        output_written,
+        dict(skipped_reasons),
+        invariant_ok,
+        elapsed,
+    )
+
+    if not invariant_ok:
+        logger.error(
+            "step_invariant_violation step=step2a_prefilter lhs_total_input=%d rhs_sum=%d",
+            total_input,
+            processed + skipped_total + failed,
+        )
+
+    logger.info(
+        "logging_hints step=step2a_prefilter "
+        "Disable DEBUG to remove per-record diagnostics; "
+        "increase PROGRESS_EVERY_N to reduce INFO volume; "
+        "decision scoring is unaffected by logging configuration."
+    )
 
 
 def main(argv=None):
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input-dir", required=True, help="Input directory (data/emails_raw_json)")
-    parser.add_argument("--output-dir", required=True, help="Output directory for passed emails (data/emails_prefiltered)")
-    parser.add_argument("--state-dir", required=True, help="State directory (data/state)")
-    parser.add_argument("--config", default="config/config.yaml", help="Path to config YAML")
-    parser.add_argument("--limit", type=int, default=0, help="Process only N files (0 = all)")
-    parser.add_argument("--only-prefix", default=None, help="Process only files whose filename starts with this prefix")
-    parser.add_argument("--dry-run", action="store_true", help="Do not write outputs; show planned actions")
+    parser.add_argument("--input-dir", required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--state-dir", required=True)
+    parser.add_argument("--config", default="config/config.yaml")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--only-prefix", default=None)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -238,13 +310,20 @@ def main(argv=None):
     decision_log_path = Path(state_dir) / "step2a_prefilter_decisions.jsonl"
     registry_path = str(state_dir / "processing_registry.jsonl")
 
-    process(input_dir, output_dir, registry_path, decision_log_path, cfg, limit=args.limit, only_prefix=args.only_prefix, dry_run=args.dry_run)
+    process(
+        input_dir,
+        output_dir,
+        registry_path,
+        decision_log_path,
+        cfg,
+        limit=args.limit,
+        only_prefix=args.only_prefix,
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":
     while True:
         main()
-        logger.warning("Prefilter: sleeping for 5 minutes")
+        logger.warning("Prefilter idle: sleeping for 5 minutes")
         time.sleep(300)
-
-
