@@ -1,4 +1,5 @@
 from dotenv import load_dotenv
+import hashlib
 from datetime import datetime
 from typing import List, Dict
 from pathlib import Path
@@ -303,6 +304,11 @@ def append_registry(path: Path, record: dict):
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
 
+
+def sha1_text(s: str) -> str:
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+
+
 # -------------------------------------------------------------------
 # Main processing loop
 # -------------------------------------------------------------------
@@ -385,8 +391,15 @@ def process_all_cleaned_emails(
         content_hash = cleaned_email.get("content_hash")
         model_version = embedding_cfg["model_version"]
 
+        cleaned_text = (cleaned_email.get("cleaned_text") or "").strip()
+        cleaned_text_hash = sha1_text(cleaned_text)
+
         reg = registry.get(email_id)
-        if reg and reg.get("content_hash") == content_hash and reg.get("embedding_model_version") == model_version:
+        if (
+            reg
+            and reg.get("cleaned_text_hash") == cleaned_text_hash
+            and reg.get("embedding_model_version") == model_version
+        ):
             skipped_total += 1
             reason = "already_indexed_same_hash_and_model"
             skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
@@ -436,7 +449,7 @@ def process_all_cleaned_emails(
                 registry_path,
                 {
                     "email_id": email_id,
-                    "content_hash": content_hash,
+                    "cleaned_text_hash": cleaned_text_hash,
                     "embedding_model_version": model_version,
                     "timestamp": datetime.utcnow().isoformat(),
                 },
@@ -481,6 +494,7 @@ def process_all_cleaned_emails(
         logger.info("FINAL UPSERT FLUSH: %s", len(upsert_buffer))
         try:
             pinecone_index.upsert(vectors=upsert_buffer, namespace="emails")
+            upsert_buffer.clear()
         except Exception:
             # Unrecoverable output failure
             logger.exception("Unrecoverable failure: final upsert flush failed (buffer_size=%s)", len(upsert_buffer))
@@ -551,7 +565,8 @@ def main():
         cleaned_dir=Path(args.cleaned_dir),
         embedding_cfg=embedding_cfg,
         pinecone_index=index,
-        registry_path=Path("data/state/processing_registry.jsonl"),
+        #registry_path=Path("data/state/processing_registry.jsonl"),
+        registry_path=Path("data/state/processing_registry_step4_rag.jsonl")
     )
 
     logger.info("Indexed %s vectors", total)
