@@ -39,11 +39,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("step2b_vendor_scoring")
 
-# Progress/heartbeat frequency (INFO) - low and predictable
-PROGRESS_EVERY_N = 50  # configurable constant: emit progress every N records seen
+# ----------------------------
+# LOGGING ADDITIONS (safe, constant-volume)
+# ----------------------------
+
+# Emit heartbeat/progress logs every N records SEEN (not processed) so incremental runs are visible.
+PROGRESS_EVERY_N = 200
+
+# Skip/fail reason keys (for counters + summary)
+SKIP_REASON_ALREADY_SCORED_UNCHANGED = "already_scored_unchanged"
+
+FAIL_REASON_READ_ERROR = "read_error"
+FAIL_REASON_MISSING_EMAIL_ID = "missing_email_id"
+FAIL_REASON_SCORING_EXCEPTION = "scoring_exception"
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
 
 
 # ----------------------------
@@ -78,8 +91,7 @@ class Step2BConfig:
 
         embedding_cfg = dict(cfg["embedding"])
         self.auth_token = os.environ["HF_TOKEN"]
-
-        # Safe to log presence only; never log the token itself
+        
         logger.info("HF auth token present: %s", bool(self.auth_token))
 
         self.model_version = str(get_nested(cfg, ["bert", "model_version"], "")).strip()
@@ -335,9 +347,9 @@ def call_inference(text: str, cfg: Step2BConfig) -> float:
         except Exception as e:
             last_err = str(e)
             if attempt < cfg.max_retries:
-                # DEBUG only: keep hot-loop INFO volume low
+                # DEBUG only: safe to disable, avoids INFO spam in hot path
                 logger.debug(
-                    "Inference attempt failed; will retry (attempt=%d/%d timeout_s=%.1f): %s",
+                    "Inference attempt failed; retrying attempt=%d/%d timeout_s=%.1f err=%s",
                     attempt + 1,
                     cfg.max_retries + 1,
                     cfg.timeout_seconds,
@@ -389,12 +401,6 @@ def link_or_copy(src: Path, dst: Path, method: str) -> None:
 
 STEP = "step2b_vendor_scoring"
 
-# Skip reasons (for counters + logs). Do not change behavior; only classify/log.
-SKIP_REASON_ALREADY_DONE = "already_scored_unchanged"
-
-FAIL_REASON_READ_ERROR = "read_error"
-FAIL_REASON_MISSING_EMAIL_ID = "missing_email_id"
-FAIL_REASON_EXCEPTION = "exception"
 
 def should_skip(entry: Optional[RegistryEntry], content_hash: str, model_version: str) -> bool:
     if not entry:
@@ -429,15 +435,16 @@ def main() -> int:
         force=True
     )
 
-    # Respect CLI log level (does not change logic/outputs; only logging configuration)
+    # LOGGING ADDITION: honor --log-level (logging-only change)
     try:
         logging.getLogger().setLevel(getattr(logging, str(args.log_level).upper()))
     except Exception:
-        # Keep existing behavior if log level is invalid; just log a hint
         logger.warning("Invalid --log-level=%r; using existing logging level", args.log_level)
 
     cfg_yaml = _load_yaml_minimal(Path(args.config))
     cfg = Step2BConfig(cfg_yaml, args.link_method)
+
+    logger.info("Vendor scoring started (model=%s)", cfg.model_version)
 
     pre_dir = Path(args.prefiltered_dir).expanduser().resolve()
     cand_dir = Path(args.candidates_dir).expanduser().resolve()
@@ -447,157 +454,118 @@ def main() -> int:
 
     registry = load_registry(registry_path)
 
-    # ---- Counters required for auditability ----
-    total_input = 0
+    # ----------------------------
+    # LOGGING ADDITION: required counters + breakdowns
+    # ----------------------------
+    input_discovered = 0   # total files discovered in prefiltered-dir
+    total_input = 0        # total inputs actually accounted for (seen) (supports invariant)
     processed = 0
     failed = 0
-
     skipped_total = 0
-    skipped_already_scored_unchanged = 0
-
-    output_written = 0  # number of candidate emails written (vendor-labeled)
-    # Additional helpful counters (INFO-safe): do not change behavior; only count
-    passed = 0  # existing semantic: vendor label
-    non_vendor = 0
-
-    # Skip breakdown dict (for structured summary)
-    skipped_by_reason: dict[str, int] = {
-        SKIP_REASON_ALREADY_DONE: 0,
-    }
-
-    # Failure breakdown (for structured summary)
+    skipped_by_reason: dict[str, int] = {SKIP_REASON_ALREADY_SCORED_UNCHANGED: 0}
     failed_by_reason: dict[str, int] = {
         FAIL_REASON_READ_ERROR: 0,
         FAIL_REASON_MISSING_EMAIL_ID: 0,
-        FAIL_REASON_EXCEPTION: 0,
+        FAIL_REASON_SCORING_EXCEPTION: 0,
     }
+    output_written = 0
+
+    # Keep existing semantic counters (passed exists in original)
+    passed = 0
+
+    # Existing "skipped" name used in legacy logs; keep as alias to skipped_total to avoid confusion
+    skipped = 0
 
     step_start = time.time()
 
-    # Compute total_input from available files up-front (enables full accounting from logs alone)
-    # NOTE: This consumes the generator once; does not change which records are processed, only how we count.
-    try:
-        all_paths = list(iter_prefiltered(pre_dir))
-        total_input = len(all_paths)
-    except Exception as e:
-        # If we cannot enumerate input, treat as unrecoverable for step accounting (but keep behavior: main would have iterated)
-        logger.error("Failed to enumerate input directory for accounting (dir=%s): %s", pre_dir, e)
-        all_paths = list(iter_prefiltered(pre_dir))
-        total_input = len(all_paths)
+    # LOGGING ADDITION: discover inputs once to log input size
+    # (Does not change behavior; iteration order remains rglob-produced order.)
+    all_paths = list(iter_prefiltered(pre_dir))
+    input_discovered = len(all_paths)
 
-    # Apply limit only to "processed" behavior (existing), but log it clearly
-    effective_limit = args.limit if args.limit else 0
-    if effective_limit:
-        logger.info(
-            "Step start: %s (model=%s threshold=%.3f dry_run=%s link_method=%s limit=%d input_files=%d registry_entries=%d endpoint_host=%s)",
-            STEP,
-            cfg.model_version,
-            cfg.threshold,
-            False,
-            cfg.link_method,
-            effective_limit,
-            total_input,
-            len(registry),
-            str(cfg.endpoint).split("/")[2] if "://" in str(cfg.endpoint) else cfg.endpoint,
-        )
-    else:
-        logger.info(
-            "Step start: %s (model=%s threshold=%.3f dry_run=%s link_method=%s limit=%d input_files=%d registry_entries=%d endpoint_host=%s)",
-            STEP,
-            cfg.model_version,
-            cfg.threshold,
-            False,
-            cfg.link_method,
-            0,
-            total_input,
-            len(registry),
-            str(cfg.endpoint).split("/")[2] if "://" in str(cfg.endpoint) else cfg.endpoint,
-        )
-
-    logger.debug(
-        "Paths: prefiltered_dir=%s candidates_dir=%s state_dir=%s decision_log=%s registry_path=%s",
-        pre_dir,
-        cand_dir,
-        st_dir,
-        decision_log,
-        registry_path,
-    )
-
-    # Heartbeat baseline
     logger.info(
-        "Heartbeat config: progress_every_n=%d (INFO) debug_in_loop=%s",
+        "Step start: step=%s input_files=%d registry_entries=%d limit=%d link_method=%s endpoint_host=%s timeout_s=%.1f max_retries=%d threshold=%.3f model_version=%s",
+        STEP,
+        input_discovered,
+        len(registry),
+        args.limit,
+        cfg.link_method,
+        (str(cfg.endpoint).split("/")[2] if "://" in str(cfg.endpoint) else cfg.endpoint),
+        cfg.timeout_seconds,
+        cfg.max_retries,
+        cfg.threshold,
+        cfg.model_version,
+    )
+    logger.info(
+        "Incremental behavior: will SKIP records only when last_completed_step=%s AND content_hash matches AND model_version matches AND no prior error.",
+        STEP,
+    )
+    logger.info(
+        "Heartbeat: INFO progress every %d records seen (DEBUG skip decisions and per-record diagnostics are safe to disable).",
         PROGRESS_EVERY_N,
-        True,
     )
 
     records_seen = 0
+    failed_legacy = 0  # maintain original variable name usage semantics in end return
 
     for p in all_paths:
         records_seen += 1
 
-        # Existing behavior: stop on processed limit (limit applies to processed count)
+        # Existing behavior: limit applies to processed count
         if args.limit and processed >= args.limit:
             logger.info(
-                "Limit reached: processed=%d limit=%d (stopping early) seen=%d/%d skipped=%d failed=%d",
+                "Limit reached: processed=%d limit=%d seen=%d/%d skipped=%d failed=%d output_written=%d",
                 processed,
                 args.limit,
                 records_seen,
-                total_input,
+                input_discovered,
                 skipped_total,
                 failed,
+                output_written,
             )
             break
 
-        # Periodic heartbeat/progress (INFO) based on records seen for liveness
+        # LOGGING ADDITION: heartbeat based on records seen (incremental runs remain visible)
         if records_seen == 1 or (records_seen % PROGRESS_EVERY_N == 0):
             logger.info(
-                "Progress: seen=%d/%d processed=%d skipped=%d (already_scored_unchanged=%d) failed=%d output_written=%d passed=%d non_vendor=%d",
+                "Progress: seen=%d/%d processed=%d skipped=%d (already_scored_unchanged=%d) failed=%d output_written=%d",
                 records_seen,
-                total_input,
+                input_discovered,
                 processed,
                 skipped_total,
-                skipped_already_scored_unchanged,
+                skipped_by_reason[SKIP_REASON_ALREADY_SCORED_UNCHANGED],
                 failed,
                 output_written,
-                passed,
-                non_vendor,
             )
 
         email_obj, err = safe_read_json(p)
         if email_obj is None:
             failed += 1
+            failed_legacy += 1
             failed_by_reason[FAIL_REASON_READ_ERROR] += 1
-            # WARNING: per-record recoverable failure; include identifier (path) and reason
-            logger.warning("Record read failed (path=%s): %s", p, err)
+            # WARNING: recoverable per-record failure with identifier and reason
+            logger.warning("Read failed: path=%s reason=%s", p, err)
             continue
 
         eid = email_obj.get("email_id")
         chash = email_obj.get("content_hash")
         if not eid:
             failed += 1
+            failed_legacy += 1
             failed_by_reason[FAIL_REASON_MISSING_EMAIL_ID] += 1
-            logger.warning("Record missing email_id; skipping as failed (path=%s)", p)
+            logger.warning("Record missing email_id; marking failed: path=%s", p)
             continue
 
         entry = registry.get(eid)
         if should_skip(entry, chash, cfg.model_version):
             skipped_total += 1
-            skipped_already_scored_unchanged += 1
-            skipped_by_reason[SKIP_REASON_ALREADY_DONE] += 1
-            # DEBUG: skip decision path (safe to disable)
-            logger.debug(
-                "Skip: %s reason=%s content_hash_match=%s model_version_match=%s",
-                eid,
-                SKIP_REASON_ALREADY_DONE,
-                True,
-                True,
-            )
+            skipped += 1  # keep original name aligned
+            skipped_by_reason[SKIP_REASON_ALREADY_SCORED_UNCHANGED] += 1
+            # DEBUG: skip decision (safe to disable)
+            logger.debug("Skip: email_id=%s reason=%s", eid, SKIP_REASON_ALREADY_SCORED_UNCHANGED)
             continue
 
         try:
-            # DEBUG only: internal decision paths / diagnostics (no payloads)
-            logger.debug("Scoring: %s (path=%s)", eid, p)
-
             text = ultra_safe_cleanup_for_bert(build_input_text(email_obj, cfg))
             prob = call_inference(text, cfg)
             label = "vendor" if prob >= cfg.threshold else "non_vendor"
@@ -621,8 +589,6 @@ def main() -> int:
                 )
                 passed += 1
                 output_written += 1
-            else:
-                non_vendor += 1
 
             append_jsonl(registry_path, {
                 "email_id": eid,
@@ -639,84 +605,64 @@ def main() -> int:
                 "last_completed_step": STEP,
                 "model_versions": {"step2b_model_version": cfg.model_version},
             })
-
             processed += 1
 
-            # Keep existing INFO progress log cadence; do NOT increase per-record INFO logs
+            # Preserve existing INFO progress cadence (do not increase per-record INFO logging)
             if processed % 10 == 0:
                 logger.info(
-                    "Progress (processed cadence): processed=%d skipped=%d passed=%d failed=%d",
-                    processed,
-                    skipped_total,
-                    passed,
-                    failed,
+                    "Progress: processed=%d skipped=%d passed=%d failed=%d",
+                    processed, skipped, passed, failed_legacy
                 )
-
         except Exception as e:
             failed += 1
-            failed_by_reason[FAIL_REASON_EXCEPTION] += 1
-            # WARNING for per-record recoverable failures; include record identifier and reason
-            logger.warning("Record scoring failed (email_id=%s path=%s): %s", eid, p, e, exc_info=logger.isEnabledFor(logging.DEBUG))
+            failed_legacy += 1
+            failed_by_reason[FAIL_REASON_SCORING_EXCEPTION] += 1
+            # WARNING: recoverable per-record failure; include record identifier and reason
+            logger.warning("Error scoring email_id=%s: %s", eid, e, exc_info=logger.isEnabledFor(logging.DEBUG))
+
+    # LOGGING ADDITION: total input accounted for invariant uses actual seen records (works even with early limit stop)
+    total_input = records_seen
 
     elapsed_s = time.time() - step_start
-
-    # Invariant: total_input = processed + skipped + failed (based on records seen, which is the actual loop input)
-    # If we stopped early due to limit, total_input accounting still refers to input_files (all_paths length),
-    # but processing only covered records_seen. For correctness, compute invariant over "seen" window.
-    invariant_lhs = records_seen
-    invariant_rhs = processed + skipped_total + failed
-    invariant_ok = (invariant_lhs == invariant_rhs)
+    invariant_ok = (total_input == processed + skipped_total + failed)
 
     # Final summary / accounting (INFO) - REQUIRED
     logger.info(
-        "Step summary: step=%s seen=%d/%d processed=%d skipped_total=%d skipped_already_scored_unchanged=%d failed=%d output_written=%d passed=%d non_vendor=%d invariant_ok=%s invariant='%d = %d + %d + %d' elapsed_s=%.3f",
+        "Step summary: step=%s input_discovered=%d total_input=%d processed=%d skipped_total=%d skipped_breakdown=%s failed=%d failed_breakdown=%s output_written=%d passed=%d invariant_ok=%s invariant='%d = %d + %d + %d' elapsed_s=%.3f",
         STEP,
-        records_seen,
+        input_discovered,
         total_input,
         processed,
         skipped_total,
-        skipped_already_scored_unchanged,
+        skipped_by_reason,
         failed,
+        failed_by_reason,
         output_written,
         passed,
-        non_vendor,
         invariant_ok,
-        invariant_lhs,
+        total_input,
         processed,
         skipped_total,
         failed,
         elapsed_s,
     )
 
-    # Detailed breakdown (INFO) - low volume, end-of-step only
-    logger.info(
-        "Skip breakdown: skipped_total=%d by_reason=%s",
-        skipped_total,
-        skipped_by_reason,
-    )
-    logger.info(
-        "Failure breakdown: failed=%d by_reason=%s",
-        failed,
-        failed_by_reason,
-    )
-
     # Logging performance hints (INFO) - REQUIRED
     logger.info(
-        "Logging performance hints: "
-        "1) DEBUG logs inside the scoring loop (skip decisions, per-record diagnostics, retry details) can be disabled for higher throughput. "
-        "2) To reduce INFO log volume, increase PROGRESS_EVERY_N (currently %d). "
-        "3) Keep the final Step summary enabled for production auditability; it is constant-volume per run.",
+        "Logging performance hints: DEBUG logs inside the hot loop (skip decisions, per-record diagnostics, inference retries) are safe to disable. "
+        "To reduce INFO volume, increase PROGRESS_EVERY_N (currently %d). "
+        "Keep the final Step summary enabled for auditability (constant-volume per run).",
         PROGRESS_EVERY_N,
     )
 
-    # Preserve original end log line (kept for compatibility)
-    logger.info("Done: processed=%d skipped=%d passed=%d failed=%d", processed, skipped_total, passed, failed)
-    return 0 if failed == 0 else 1
+    # Preserve original final log line (compat + familiarity)
+    logger.info("Done: processed=%d skipped=%d passed=%d failed=%d", processed, skipped, passed, failed_legacy)
+    return 0 if failed_legacy == 0 else 1
 
 
 if __name__ == "__main__":
     load_dotenv(dotenv_path=".env")
-
+    
     while True:
         main()
         time.sleep(300)
