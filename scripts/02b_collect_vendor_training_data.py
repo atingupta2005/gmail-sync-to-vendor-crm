@@ -2,19 +2,17 @@
 """
 02b_collect_vendor_training_data.py
 
-FINAL – DO NOT MODIFY
+FINAL – CORRECTED FOR PIPELINE STRUCTURE
 
-Purpose:
-- Collects vendor classification training data
-- Produces ONE human-editable + machine-usable JSONL file
-- Uses existing Step2B outputs as source of truth
+- Reads email text from data/emails_prefiltered/
+- Reads labels from data/state/step2b_vendor_scoring.jsonl
+- Produces ONE human-editable training file
 
 Output:
 - data/vendor_training_review.jsonl
 
-Review rule:
-- Humans may ONLY edit `final_label`
-- Do NOT change any other field
+Human rule:
+- ONLY edit `final_label`
 """
 
 import json
@@ -23,17 +21,14 @@ from pathlib import Path
 from typing import Dict, Any
 
 
-# =============================
-# CONFIG (DO NOT CHANGE)
-# =============================
-
-INPUT_DIR = Path("data/emails_prefiltered")
+EMAIL_DIR = Path("data/emails_prefiltered")
+STATE_FILE = Path("data/state/step2b_vendor_scoring.jsonl")
 OUTPUT_FILE = Path("data/vendor_training_review.jsonl")
 
 
-# =============================
-# TEXT HELPERS (STABLE)
-# =============================
+# -------------------------
+# Helpers
+# -------------------------
 
 def strip_html(html: str) -> str:
     text = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
@@ -42,7 +37,7 @@ def strip_html(html: str) -> str:
     return text.strip()
 
 
-def build_model_input(email: Dict[str, Any]) -> str:
+def build_text(email: Dict[str, Any]) -> str:
     headers = email.get("headers", {}) or {}
     subject = str(headers.get("subject", "")).strip()
     from_addr = str(headers.get("from", "")).strip()
@@ -57,49 +52,64 @@ def build_model_input(email: Dict[str, Any]) -> str:
         "[FROM]\n" + from_addr,
         "[BODY]\n" + text,
     ]
-
     return "\n\n".join(p for p in parts if p.strip())
 
 
-# =============================
-# MAIN (DO NOT CHANGE)
-# =============================
+# -------------------------
+# Main
+# -------------------------
 
-def main() -> None:
+def main():
+    # 1️⃣ Load Step2b labels
+    label_by_email_id: dict[str, str] = {}
+
+    with STATE_FILE.open("r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+
+            eid = rec.get("email_id")
+            label = rec.get("predicted_label")
+            if eid and label in ("vendor", "non_vendor"):
+                label_by_email_id[eid] = label
+
+    print(f"Loaded labels for {len(label_by_email_id)} emails")
+
+    # 2️⃣ Build training file
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     written = 0
     skipped = 0
 
     with OUTPUT_FILE.open("w", encoding="utf-8") as out:
-        for path in INPUT_DIR.rglob("*.json"):
+        for path in EMAIL_DIR.rglob("*.json"):
             try:
                 email = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 skipped += 1
                 continue
 
-            bert = email.get("bert")
-            if not bert:
+            eid = email.get("email_id")
+            if not eid or eid not in label_by_email_id:
                 skipped += 1
                 continue
 
-            predicted = bert.get("label")
-            if predicted not in ("vendor", "non_vendor"):
+            text = build_text(email)
+            if not text.strip():
                 skipped += 1
                 continue
+
+            predicted = label_by_email_id[eid]
 
             record = {
-                "email_id": email.get("email_id"),
-                "text": build_model_input(email),
+                "email_id": eid,
+                "text": text,
                 "predicted_label": predicted,
-                # 👇 THE ONLY FIELD HUMANS MAY EDIT
+                # 👇 ONLY FIELD HUMANS MAY EDIT
                 "final_label": predicted,
             }
-
-            if not record["text"].strip():
-                skipped += 1
-                continue
 
             out.write(json.dumps(record, ensure_ascii=False) + "\n")
             written += 1
