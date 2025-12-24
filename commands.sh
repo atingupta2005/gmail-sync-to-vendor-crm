@@ -73,7 +73,17 @@ python scripts/validate_vendor_candidates.py \
 python scripts/03_cleanup_vendor_emails.py \
   --candidates-dir data/emails_candidates \
   --output-dir data/emails_cleaned \
-  --state-dir data/state
+  --state-dir data/state \
+  --loop
+
+python scripts/03_cleanup_vendor_emails.py \
+  --candidates-dir data/emails_candidates \
+  --output-dir data/emails_cleaned \
+  --state-dir data/state \
+  --export-contacts \
+  --training-only
+
+cat data/state/vendor_contacts_latest.json
 
 # Terminal 6
 cd ~/gmail-sync-to-vendor-crm
