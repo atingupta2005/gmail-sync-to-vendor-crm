@@ -262,6 +262,10 @@ TECH_KEYWORDS = [
     "blockchain", "hyperledger", "ethereum", "corda", "smart contract", "smart contracts"
 ]
 
+DEFAULT_EXCLUDE_EMAILS = {
+    "atingupta2005@gmail.com",
+    "u13@atttrainings.com",
+}
 
 def detect_topics(text: str) -> List[str]:
     """
@@ -697,33 +701,62 @@ def build_contact_record(
     source_path: str,
     exclude_emails: List[str],
 ) -> Dict[str, Any]:
+    """
+    Build a deterministic vendor contact record.
+
+    Key goals:
+    - Prefer sender identity (From/Reply-To) for contact_key.
+    - Prevent "thread participant" pollution by NOT blindly adding every email seen in body.
+    - Default-exclude your own addresses even if caller forgets to pass --exclude-email.
+    - Allow a tiny amount of body email inclusion only when it matches sender domain(s).
+    """
+    
     subject = header_str(hdrs, "subject")
     date = header_str(hdrs, "date")
 
+    # Sender identity (preferred)
     from_emails = parse_header_addresses(hdrs.get("from"))
     reply_to_emails = parse_header_addresses(hdrs.get("reply_to"))
     sender_emails = stable_dedup_list(from_emails + reply_to_emails)
 
+    # Extract from signature/body
     sig_emails = extract_emails(signature_text)
     body_emails = extract_emails(cleaned_text)
 
     phones = stable_dedup_list(extract_phones(signature_text) + extract_phones(cleaned_text))
     urls = stable_dedup_list(extract_urls(signature_text) + extract_urls(cleaned_text))
 
+    # Exclusions (CLI + defaults)
     exclude_set = {e.lower() for e in (exclude_emails or [])}
+    exclude_set |= {e.lower() for e in DEFAULT_EXCLUDE_EMAILS}
 
-    # candidate emails include sender, signature, body; but key prefers sender
-    candidate_emails = stable_dedup_list(sender_emails + sig_emails + body_emails)
-    candidate_emails = [e for e in candidate_emails if e not in exclude_set]
-    sender_emails = [e for e in sender_emails if e not in exclude_set]
+    # ---- Candidate emails: sender + signature only (safe) ----
+    candidate_emails = stable_dedup_list(sender_emails + sig_emails)
 
+    # ---- OPTIONAL: only include body emails if they match sender domain(s) ----
+    sender_domains = {e.split("@", 1)[1] for e in sender_emails if "@" in e}
+    if sender_domains:
+        for e in body_emails:
+            try:
+                dom = e.split("@", 1)[1]
+            except Exception:
+                continue
+            if dom in sender_domains:
+                candidate_emails.append(e)
+        candidate_emails = stable_dedup_list(candidate_emails)
+
+    # Apply exclusions last
+    candidate_emails = [e for e in candidate_emails if e and e.lower() not in exclude_set]
+    sender_emails = [e for e in sender_emails if e and e.lower() not in exclude_set]
+
+    # Heuristics from signature
     person_name, vendor_name = heuristic_name_vendor_from_signature(signature_text)
 
+    # Strong preference: key from sender identity
     contact_key = choose_contact_key(sender_emails, candidate_emails, phones, urls, email_id)
 
     combined_for_topics = f"{subject}\n{cleaned_text}\n{signature_text}"
     topics_detected = detect_topics(combined_for_topics)
-
 
     return {
         "contact_key": contact_key,
