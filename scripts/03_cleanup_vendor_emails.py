@@ -327,6 +327,14 @@ MARKETING_EXCLUDE_KEYWORDS = [
     "limited time", "sale", "promotion"
 ]
 
+
+JOB_SUBJECT_RE = re.compile(r"^\s*(?:job\s*\||✉️\s*job\s*\|)", re.IGNORECASE)
+
+def is_job_like_subject(subject: str) -> bool:
+    return bool(JOB_SUBJECT_RE.search(subject or ""))
+
+
+
 def is_training_requirement(subject: str, text: str) -> bool:
     """
     Deterministic "training requirement" gate:
@@ -1062,6 +1070,11 @@ def main() -> int:
             # Contacts export (deterministic) — INBOX ONLY (hard-coded)
             if args.export_contacts and is_inbox_email(email):
                 subject = header_str(hdrs, "subject")
+
+                # hard drop job-like subjects from contacts export
+                if is_job_like_subject(subject):
+                    continue
+
                 gate_text = f"{cleanup['cleaned_text']}\n{cleanup['signature_text']}"
                 gate_ok = True
                 if args.training_only:
