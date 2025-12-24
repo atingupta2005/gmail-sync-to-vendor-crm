@@ -308,22 +308,29 @@ def is_inbox_email(email_obj: Dict[str, Any]) -> bool:
 
     return False
 
+MARKETING_EXCLUDE_KEYWORDS = [
+    "save", "discount", "offer", "code:", "coupon", "register", "signup", "sign up",
+    "unsubscribe", "webinar", "conference", "conf is back", "trending certification",
+    "limited time", "sale", "promotion"
+]
 
 def is_training_requirement(subject: str, text: str) -> bool:
     """
-    Deterministic "training requirement" gate:
-      - (training intent AND request intent) OR (training intent AND tech keyword)
-
-    This improves precision over the old "any keyword anywhere" rule, while keeping high recall.
+    Stricter deterministic gate for vendor training requirements:
+      - must have training intent
+      - must have request intent (RFP/need/proposal/pricing/dates/etc.)
+      - must NOT look like marketing/newsletter
     """
     hay = f"{subject or ''}\n{text or ''}".lower()
 
+    # Exclude obvious marketing/newsletters deterministically
+    if _contains_any(hay, MARKETING_EXCLUDE_KEYWORDS):
+        return False
+
     has_intent = _contains_any(hay, TRAINING_INTENT_KEYWORDS)
     has_request = _contains_any(hay, TRAINING_REQUEST_KEYWORDS)
-    topics = detect_topics(hay)
-    has_tech = len(topics) > 0
 
-    return (has_intent and has_request) or (has_intent and has_tech)
+    return has_intent and has_request
 
 
 # -------------------------
@@ -980,11 +987,11 @@ def main() -> int:
     )
 
     for json_path in candidates_dir.rglob("*.json"):
-        total_input += 1
-
         if args.limit and processed >= args.limit:
             logger.info("Processing limit reached (%d); stopping early", args.limit)
             break
+        total_input += 1
+
 
         try:
             with json_path.open("r", encoding="utf-8") as f:
