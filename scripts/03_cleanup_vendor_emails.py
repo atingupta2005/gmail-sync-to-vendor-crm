@@ -199,6 +199,19 @@ def parse_header_addresses(value: Any) -> List[str]:
     return stable_dedup_list(addrs)
 
 
+JOB_SUBJECT_REJECT_PATTERNS = [
+    r"^\s*job\s*\|",
+    r"^\s*✉️\s*job\s*\|",
+    r"\b(opening|openings)\b",
+    r"\burgent\s+req\b",
+    r"\bhiring\b",
+    r"\brecruit(ment|er|ing)\b",
+    r"\bfreelance\b",
+    r"\bretainer(s)?\b",
+    r"\bapply\s+now\b",
+]
+_JOB_RE = re.compile("|".join(f"(?:{p})" for p in JOB_SUBJECT_REJECT_PATTERNS), re.IGNORECASE)
+
 # -------------------------
 # Training requirement detection (deterministic)
 # -------------------------
@@ -316,21 +329,24 @@ MARKETING_EXCLUDE_KEYWORDS = [
 
 def is_training_requirement(subject: str, text: str) -> bool:
     """
-    Stricter deterministic gate for vendor training requirements:
-      - must have training intent
-      - must have request intent (RFP/need/proposal/pricing/dates/etc.)
-      - must NOT look like marketing/newsletter
+    Deterministic "training requirement" gate:
+      - reject job-board / hiring posts by subject
+      - then: (training intent AND request intent) OR (training intent AND tech keyword)
     """
-    hay = f"{subject or ''}\n{text or ''}".lower()
+    subj = (subject or "").strip().lower()
 
-    # Exclude obvious marketing/newsletters deterministically
-    if _contains_any(hay, MARKETING_EXCLUDE_KEYWORDS):
+    # Hard reject obvious job-board / hiring posts
+    if _JOB_RE.search(subj):
         return False
+
+    hay = f"{subject or ''}\n{text or ''}".lower()
 
     has_intent = _contains_any(hay, TRAINING_INTENT_KEYWORDS)
     has_request = _contains_any(hay, TRAINING_REQUEST_KEYWORDS)
+    topics = detect_topics(hay)
+    has_tech = len(topics) > 0
 
-    return has_intent and has_request
+    return (has_intent and has_request) or (has_intent and has_tech)
 
 
 # -------------------------
