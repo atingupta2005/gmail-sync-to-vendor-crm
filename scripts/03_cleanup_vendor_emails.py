@@ -710,7 +710,7 @@ def build_contact_record(
     - Default-exclude your own addresses even if caller forgets to pass --exclude-email.
     - Allow a tiny amount of body email inclusion only when it matches sender domain(s).
     """
-    
+
     subject = header_str(hdrs, "subject")
     date = header_str(hdrs, "date")
 
@@ -733,24 +733,97 @@ def build_contact_record(
     # ---- Candidate emails: sender + signature only (safe) ----
     candidate_emails = stable_dedup_list(sender_emails + sig_emails)
 
-    # ---- OPTIONAL: only include body emails if they match sender domain(s) ----
-    sender_domains = {e.split("@", 1)[1] for e in sender_emails if "@" in e}
-    if sender_domains:
-        for e in body_emails:
-            try:
-                dom = e.split("@", 1)[1]
-            except Exception:
+    # Normalize domains helper
+    def _dom(email: str) -> str:
+        try:
+            return email.split("@", 1)[1].strip().lower()
+        except Exception:
+            return ""
+
+    # ---- OPTIONAL: only include body emails if they match allowed domain(s) ----
+    sender_domains = { _dom(e) for e in sender_emails if "@" in e }
+    sender_domains.discard("")
+
+    # Heuristics from signature
+    person_name, vendor_name = heuristic_name_vendor_from_signature(signature_text)
+
+    # --- NEW: sanitize vendor_name (avoid "Mon-Fri...", URLs, addresses, disclaimers, etc.) ---
+    def _looks_like_bad_vendor(v: str) -> bool:
+        if not v:
+            return True
+        s = v.strip()
+        if len(s) < 2:
+            return True
+        low = s.lower()
+
+        # obvious non-vendor patterns
+        if "http://" in low or "https://" in low or "www." in low:
+            return True
+        if "@" in low:
+            return True
+        # time/day / greetings / thanks / regards
+        if any(x in low for x in ["mon-fri", "mon - fri", "thanks", "regards", "warm regards"]):
+            return True
+        # address-ish (pin code / city-state-zip formats)
+        if any(x in low for x in ["new delhi", "mumbai", "pune", "bangalore", "hyderabad", "chennai"]):
+            # not always bad, but usually in your “bad vendor” examples
+            return True
+        # lots of digits => probably phone/address/disclaimer
+        digit_count = sum(ch.isdigit() for ch in s)
+        if digit_count >= 4:
+            return True
+        # disclaimer-ish
+        if any(x in low for x in ["disclaimer", "confidential", "privileged", "bse ltd"]):
+            return True
+        return False
+
+    if _looks_like_bad_vendor(vendor_name):
+        vendor_name = ""
+
+    # --- NEW: vendor fallback from sender domain (only if still missing) ---
+    def _vendor_from_sender_domain(sender_list: List[str]) -> str:
+        # choose first non-free-email domain; turn "stripedata.net" -> "STRIPEDATA"
+        free = {
+            "gmail.com","googlemail.com","yahoo.com","ymail.com","outlook.com","hotmail.com",
+            "live.com","rediffmail.com","icloud.com"
+        }
+        for e in sender_list:
+            d = _dom(e)
+            if not d:
                 continue
-            if dom in sender_domains:
+            # base domain naive: last two labels
+            parts = d.split(".")
+            base = ".".join(parts[-2:]) if len(parts) > 2 else d
+            if base in free:
+                continue
+            core = base.split(".", 1)[0]
+            core = re.sub(r"[^a-z0-9]+", " ", core.lower()).strip()
+            if core:
+                return core.upper()
+        return ""
+
+    if not vendor_name:
+        vendor_name = _vendor_from_sender_domain(sender_emails)
+
+    # If we have a vendor name derived from sender domain, allow that domain too (still safe)
+    allowed_domains = set(sender_domains)
+
+    if vendor_name and sender_emails:
+        # derive domain again from first sender email (vendor_name is not reliable for domain)
+        first_sender_dom = _dom(sender_emails[0])
+        if first_sender_dom:
+            allowed_domains.add(first_sender_dom)
+
+    if allowed_domains:
+        for e in body_emails:
+            d = _dom(e)
+            if d and d in allowed_domains:
                 candidate_emails.append(e)
         candidate_emails = stable_dedup_list(candidate_emails)
 
     # Apply exclusions last
     candidate_emails = [e for e in candidate_emails if e and e.lower() not in exclude_set]
     sender_emails = [e for e in sender_emails if e and e.lower() not in exclude_set]
-
-    # Heuristics from signature
-    person_name, vendor_name = heuristic_name_vendor_from_signature(signature_text)
 
     # Strong preference: key from sender identity
     contact_key = choose_contact_key(sender_emails, candidate_emails, phones, urls, email_id)
@@ -778,6 +851,39 @@ def build_contact_record(
             }
         ],
     }
+
+
+
+# --- fallback: vendor from sender domain (only if vendor_name is missing) ---
+import re
+
+GENERIC_DOMAINS = {
+    "gmail.com","googlemail.com","yahoo.com","ymail.com","outlook.com","hotmail.com",
+    "live.com","rediffmail.com","icloud.com"
+}
+
+def _base_domain(dom: str) -> str:
+    dom = (dom or "").strip().lower()
+    dom = re.sub(r"^www\.", "", dom)
+    parts = dom.split(".")
+    if len(parts) <= 2:
+        return dom
+    # naive last-2-label base; good enough for this pipeline
+    return ".".join(parts[-2:])
+
+def _vendor_from_email_domain(email: str) -> str:
+    if not email or "@" not in email:
+        return ""
+    dom = email.split("@", 1)[1].lower()
+    bd = _base_domain(dom)
+    if bd in GENERIC_DOMAINS:
+        return ""
+    core = bd.split(".", 1)[0]
+    core = re.sub(r"[^a-z0-9]+", " ", core).strip()
+    if not core:
+        return ""
+    return core.upper()
+
 
 
 def find_existing_keys(
