@@ -342,11 +342,16 @@ FORWARDED_MARKERS = [
 
 SIGNATURE_DELIMITERS = [
     re.compile(r"^--\s*$", re.MULTILINE),
-    re.compile(r"^Regards,?$", re.MULTILINE | re.IGNORECASE),
-    re.compile(r"^Thanks,?$", re.MULTILINE | re.IGNORECASE),
-    re.compile(r"^Best regards,?$", re.MULTILINE | re.IGNORECASE),
-    re.compile(r"^Sincerely,?$", re.MULTILINE | re.IGNORECASE),
+
+    # Common sign-offs (must be a standalone line)
+    re.compile(r"^(?:best\s+regards|kind\s+regards|warm\s+regards)\s*,?\s*$", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^(?:regards|thanks|thank\s+you)\s*,?\s*$", re.MULTILINE | re.IGNORECASE),
+
+    # Variants you hit: "Thanks and Regards" / "Thanks & Regards"
+    re.compile(r"^thanks\s*(?:and|&)\s*regards\s*,?\s*$", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^regards\s*(?:and|&)\s*thanks\s*,?\s*$", re.MULTILINE | re.IGNORECASE),
 ]
+
 
 DISCLAIMER_KEYWORDS = [
     "confidential",
@@ -477,13 +482,13 @@ def append_registry(registry_path: Path, record: Dict[str, Any]) -> None:
 # -------------------------
 # Header helpers (NEW)
 # -------------------------
-
 def pick_headers(email_obj: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Best-effort extraction of header fields from Step 2B candidate JSON.
+    Case-insensitive extraction of header fields from Step 2B candidate JSON.
+    Supports Title-Case keys like 'From', 'Subject', 'Reply-To', etc.
     We never "clean" headers; we only carry them forward.
     """
-    hdrs: Dict[str, Any] = {}
+    # locate headers dict
     src = None
     if isinstance(email_obj.get("headers"), dict):
         src = email_obj["headers"]
@@ -492,17 +497,35 @@ def pick_headers(email_obj: Dict[str, Any]) -> Dict[str, Any]:
     elif isinstance(email_obj.get("meta", {}).get("headers"), dict):
         src = email_obj["meta"]["headers"]
 
-    if isinstance(src, dict):
-        for k in ["from", "to", "cc", "bcc", "reply_to", "subject", "date", "message_id"]:
-            if k in src:
-                hdrs[k] = src.get(k)
+    src = src or {}
+    # normalize keys to lowercase for matching
+    src_ci = {str(k).strip().lower(): v for k, v in src.items()}
 
-    # fallback if flattened
-    for k in ["from", "to", "cc", "bcc", "reply_to", "subject", "date", "message_id"]:
-        if k not in hdrs and k in email_obj:
-            hdrs[k] = email_obj.get(k)
+    keymap = {
+        "from": ["from"],
+        "to": ["to"],
+        "cc": ["cc"],
+        "bcc": ["bcc"],
+        "reply_to": ["reply-to", "reply_to", "replyto"],
+        "subject": ["subject"],
+        "date": ["date"],
+        "message_id": ["message-id", "message_id", "messageid"],
+    }
 
-    return hdrs
+    out: Dict[str, Any] = {}
+    for ok, candidates in keymap.items():
+        for ck in candidates:
+            if ck in src_ci:
+                out[ok] = src_ci[ck]
+                break
+
+    # fallback if flattened (rare)
+    for k in out.keys():
+        if not out.get(k) and k in email_obj:
+            out[k] = email_obj.get(k)
+
+    return out
+
 
 
 def header_str(hdrs: Dict[str, Any], key: str) -> str:
@@ -664,6 +687,10 @@ def build_contact_record(
 
     contact_key = choose_contact_key(sender_emails, candidate_emails, phones, urls, email_id)
 
+    combined_for_topics = f"{subject}\n{cleaned_text}\n{signature_text}"
+    topics_detected = detect_topics(combined_for_topics)
+
+
     return {
         "contact_key": contact_key,
         "person_name": person_name,
@@ -674,6 +701,7 @@ def build_contact_record(
         "last_subject": subject,
         "first_seen": None,   # filled by upsert
         "last_seen": None,    # filled by upsert
+        "topics_detected": topics_detected,
         "evidence": [
             {
                 "email_id": email_id,
@@ -718,6 +746,21 @@ def find_existing_keys(
     return hits
 
 
+def rebuild_all_lookups(contacts: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+    lookups = {"email": {}, "phone": {}, "domain": {}}
+    for ck, c in contacts.items():
+        for e in c.get("emails", []) or []:
+            lookups["email"][e.lower()] = ck
+        for p in c.get("phones", []) or []:
+            d = digits_only(p)
+            if len(d) >= 8:
+                lookups["phone"][d] = ck
+        for u in c.get("websites", []) or []:
+            d = domain_from_url(u)
+            if d:
+                lookups["domain"][d] = ck
+    return lookups
+
 def merge_contacts_into(
     contacts: Dict[str, Dict[str, Any]],
     target_key: str,
@@ -734,6 +777,10 @@ def merge_contacts_into(
     tgt["emails"] = stable_dedup_list((tgt.get("emails", []) or []) + (src.get("emails", []) or []))
     tgt["phones"] = stable_dedup_list((tgt.get("phones", []) or []) + (src.get("phones", []) or []))
     tgt["websites"] = stable_dedup_list((tgt.get("websites", []) or []) + (src.get("websites", []) or []))
+    tgt["topics_detected"] = stable_dedup_list(
+        (tgt.get("topics_detected", []) or []) + (src.get("topics_detected", []) or [])
+    )
+
 
     if not tgt.get("person_name") and src.get("person_name"):
         tgt["person_name"] = src["person_name"]
@@ -827,6 +874,10 @@ def upsert_contact(
         existing["emails"] = stable_dedup_list((existing.get("emails", []) or []) + emails)
         existing["phones"] = stable_dedup_list((existing.get("phones", []) or []) + phones)
         existing["websites"] = stable_dedup_list((existing.get("websites", []) or []) + urls)
+        existing["topics_detected"] = stable_dedup_list(
+            (existing.get("topics_detected", []) or []) + (record.get("topics_detected", []) or [])
+        )
+
 
         if not existing.get("person_name") and record.get("person_name"):
             existing["person_name"] = record["person_name"]
@@ -1060,6 +1111,7 @@ def main() -> int:
 
     # Persist contacts store + snapshot
     if args.export_contacts:
+        lookups = rebuild_all_lookups(contacts)
         atomic_write_json(contacts_store_path, {"contacts": contacts, "lookups": lookups})
         write_contacts_snapshot(contacts, contacts_snapshot_path)
         logger.info(
