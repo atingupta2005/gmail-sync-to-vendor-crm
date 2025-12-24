@@ -491,11 +491,9 @@ def append_registry(registry_path: Path, record: Dict[str, Any]) -> None:
 # -------------------------
 def pick_headers(email_obj: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Case-insensitive extraction of header fields from Step 2B candidate JSON.
-    Supports Title-Case keys like 'From', 'Subject', 'Reply-To', etc.
-    We never "clean" headers; we only carry them forward.
+    Best-effort extraction of header fields from Step 2B candidate JSON.
+    Handles case-insensitive raw header keys like 'Subject', 'From', 'Reply-To'.
     """
-    # locate headers dict
     src = None
     if isinstance(email_obj.get("headers"), dict):
         src = email_obj["headers"]
@@ -504,9 +502,8 @@ def pick_headers(email_obj: Dict[str, Any]) -> Dict[str, Any]:
     elif isinstance(email_obj.get("meta", {}).get("headers"), dict):
         src = email_obj["meta"]["headers"]
 
-    src = src or {}
-    # normalize keys to lowercase for matching
-    src_ci = {str(k).strip().lower(): v for k, v in src.items()}
+    # Build case-insensitive map
+    src_ci = {str(k).strip().lower(): v for k, v in (src or {}).items()}
 
     keymap = {
         "from": ["from"],
@@ -520,18 +517,24 @@ def pick_headers(email_obj: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     out: Dict[str, Any] = {}
-    for ok, candidates in keymap.items():
-        for ck in candidates:
-            if ck in src_ci:
-                out[ok] = src_ci[ck]
+    for out_key, in_keys in keymap.items():
+        for ik in in_keys:
+            if ik in src_ci:
+                out[out_key] = src_ci[ik]
                 break
 
-    # fallback if flattened (rare)
-    for k in out.keys():
-        if not out.get(k) and k in email_obj:
-            out[k] = email_obj.get(k)
+    # fallback if flattened at top-level (also case-insensitive)
+    top_ci = {str(k).strip().lower(): k for k in email_obj.keys()}
+    for out_key, in_keys in keymap.items():
+        if out_key in out:
+            continue
+        for ik in in_keys:
+            if ik in top_ci:
+                out[out_key] = email_obj.get(top_ci[ik])
+                break
 
     return out
+
 
 
 
