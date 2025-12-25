@@ -377,6 +377,12 @@ def main() -> None:
         for path in args.email_dir.rglob("*.json"):
             try:
                 email = json.loads(path.read_text(encoding="utf-8"))
+                headers = email.get("headers", {}) or {}
+                from_hdr = str(headers.get("From") or headers.get("from") or "").lower()
+
+                if "atingupta2005@gmail.com" in from_hdr:
+                    skipped += 1
+                    continue                
             except Exception:
                 skipped += 1
                 continue
