@@ -20,7 +20,7 @@ python3 scripts/02b_collect_vendor_training_data.py \
   --deny-domains scripts/data/lists/deny_domains_clean.txt \
   --deny-names scripts/data/lists/deny_names_clean.txt \
   --allow-threshold 94 \
-  --deny-threshold 86
+  --deny-threshold 88
 
 # 3) Verify output
 wc -l data/vendor_training_review.jsonl
