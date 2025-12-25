@@ -95,7 +95,6 @@ env.bak/
 Thumbs.db
 
 # Data and state (don't commit large datasets)
-data/
 config/config.yaml
 
 
