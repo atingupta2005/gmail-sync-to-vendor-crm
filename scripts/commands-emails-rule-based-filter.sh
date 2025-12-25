@@ -14,12 +14,10 @@ python3 scripts/02b_collect_vendor_training_data.py \
   --state-file data/state/step2b_vendor_scoring.jsonl \
   --output-file data/vendor_training_review.jsonl \
   --allow-names scripts/data/lists/positive_vendor_names_clean.txt \
-  --allow-keywords scripts/data/lists/positive_keywords_clean.txt \
   --allow-domains scripts/data/lists/positive_vendor_domains_clean.txt \
   --deny-domains scripts/data/lists/deny_domains_clean.txt \
   --deny-names scripts/data/lists/deny_names_clean.txt \
   --allow-threshold 93 \
-  --allow-keyword-threshold 92 \
   --deny-threshold 88
 
 

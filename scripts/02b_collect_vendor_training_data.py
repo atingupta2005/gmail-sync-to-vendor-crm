@@ -289,7 +289,6 @@ def main() -> None:
                 label_by_email_id[eid] = label
 
     print(f"Loaded labels for {len(label_by_email_id)} emails")
-    print(f"ALLOW vendor_names={len(allow_vendor_names)}  ALLOW keywords={len(allow_positive_keywords)}  ALLOW domains={len(allow_domains)}")
     print(f"DENY  names={len(deny_names)}  DENY  domains={len(deny_domains)}")
     if not _HAS_RAPIDFUZZ:
         print("WARNING: rapidfuzz not installed; using difflib fallback.")
