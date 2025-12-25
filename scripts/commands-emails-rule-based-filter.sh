@@ -1,17 +1,13 @@
-pip install rapidfuzz
+# 0) Install fuzzy dependency (use python from venv)
+python3 -m pip install -U rapidfuzz
 
-ls -lah data/state_excl/step2b_vendor_scoring.jsonl
-
-ls -lah data/state_excl
-rm -rf data/state_excl
-mkdir -p data/state_excl
-
-
+# 1) (Optional) sanity checks
 ls -lah data/emails_prefiltered | head
-ls -lah data/lists/
+ls -lah data/state_excl/step2b_vendor_scoring.jsonl
+ls -lah data/lists/ 2>/dev/null || echo "NOTE: data/lists/ doesn't exist yet"
 
-
-python3 02b_collect_vendor_training_data.py \
+# 2) Run training-data collector (UPDATED script is in scripts/)
+python3 scripts/02b_collect_vendor_training_data.py \
   --email-dir data/emails_prefiltered \
   --state-file data/state_excl/step2b_vendor_scoring.jsonl \
   --output-file data/vendor_training_review.jsonl \
@@ -24,20 +20,24 @@ python3 02b_collect_vendor_training_data.py \
   --allow-keyword-threshold 92 \
   --deny-threshold 90
 
-
+# 3) Verify output
 wc -l data/vendor_training_review.jsonl
 head -n 3 data/vendor_training_review.jsonl
 
+# 4) Quick stats: how many records had rule overrides
 grep -c '"rule_override": null' data/vendor_training_review.jsonl
 grep -c '"rule_override": {' data/vendor_training_review.jsonl
 
+# 5) Manual review (script is also in scripts/)
+python3 scripts/02b_quick_review_vendor_data.py --limit 50 --body-chars 200
 
-python3 02b_quick_review_vendor_data.py --limit 50 --body-chars 200
+# 6) Update your keyword files manually:
+# - data/lists/positive_keywords_clean.txt
+# - data/lists/deny_names_clean_final.txt
+# - (optional) data/lists/positive_vendor_names_clean.txt / positive_vendor_domains_clean.txt
 
-
-# Update positive/ deny keywords
-
-python3 02b_collect_vendor_training_data.py \
+# 7) Re-run with the same full command (DO NOT switch back to old flags)
+python3 scripts/02b_collect_vendor_training_data.py \
   --email-dir data/emails_prefiltered \
   --state-file data/state_excl/step2b_vendor_scoring.jsonl \
   --output-file data/vendor_training_review.jsonl \

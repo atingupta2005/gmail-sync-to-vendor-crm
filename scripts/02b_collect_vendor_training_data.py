@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-02b_collect_vendor_training_data.py (FINAL)
+02b_collect_vendor_training_data.py (FINAL - Python 3.8 compatible)
 
 What it does
 - Reads email JSONs from: data/emails_prefiltered/
-- Reads model labels from: data/state/step2b_vendor_scoring.jsonl
+- Reads model labels from: data/state_excl/step2b_vendor_scoring.jsonl
 - Applies external allow/deny lists with fuzzy matching (ALLOW wins)
 - ALSO applies a strict positive-keywords file (invoice/PO/SOW etc.) to force vendor
 - Writes ONE human-editable training file: data/vendor_training_review.jsonl
@@ -25,6 +25,8 @@ Notes
 - For best fuzzy quality & speed install RapidFuzz: pip install rapidfuzz
 """
 
+from __future__ import annotations  # <-- REQUIRED for Python 3.8 with list[str], dict[str,str]
+
 import argparse
 import json
 import re
@@ -32,14 +34,16 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 EMAIL_DIR = Path("data/emails_prefiltered")
-STATE_FILE = Path("data/state/step2b_vendor_scoring.jsonl")
+STATE_FILE = Path("data/state_excl/step2b_vendor_scoring.jsonl")
 OUTPUT_FILE = Path("data/vendor_training_review.jsonl")
 
 DEFAULT_ALLOW_NAMES = Path("data/lists/positive_vendor_names_clean.txt")
-DEFAULT_ALLOW_KEYWORDS = Path("data/lists/positive_keywords_clean.txt")  # <-- NEW strict positive keywords file
+DEFAULT_ALLOW_KEYWORDS = Path("data/lists/positive_keywords_clean.txt")
 DEFAULT_ALLOW_DOMAINS = Path("data/lists/positive_vendor_domains_clean.txt")
+
 DEFAULT_DENY_DOMAINS = Path("data/lists/deny_domains_clean.txt")
-DEFAULT_DENY_NAMES = Path("data/lists/deny_names_clean.txt")
+DEFAULT_DENY_NAMES = Path("data/lists/deny_names_clean_final.txt")
+
 
 # -------------------------
 # Optional fast fuzzy match
@@ -65,7 +69,8 @@ def strip_html(html: str) -> str:
 
 def build_text(email: Dict[str, Any]) -> str:
     headers = email.get("headers", {}) or {}
-    # Support both common key styles
+
+    # Support both key styles (some pipelines use Subject/From, some subject/from)
     subject = str(headers.get("subject", "") or headers.get("Subject", "")).strip()
     from_addr = str(headers.get("from", "") or headers.get("From", "")).strip()
 
@@ -154,10 +159,7 @@ def best_fuzzy_match(text_norm: str, keywords_norm: list[str]) -> Tuple[Optional
 
 
 def strict_keyword_hit(text_norm: str, keywords_norm: list[str]) -> Optional[str]:
-    """
-    Strict keyword match: substring (fast, deterministic).
-    Use for high-precision phrases like 'purchase order', 'statement of work', etc.
-    """
+    """Strict keyword match: substring (fast, deterministic)."""
     for kw in keywords_norm:
         if kw and kw in text_norm:
             return kw
@@ -209,7 +211,7 @@ def apply_rules(
                 "score": sc,
             }
 
-    # 3) ALLOW by strict positive keywords (best for invoice/PO/SOW etc.)
+    # 3) ALLOW by strict positive keywords
     if allow_positive_keywords_norm:
         hit = strict_keyword_hit(text_norm, allow_positive_keywords_norm)
         if hit:
@@ -217,7 +219,7 @@ def apply_rules(
                 "rule": "allow_strict_keyword_substring",
                 "matched_keyword": hit,
             }
-        # optional fuzzy on strict keywords (use slightly higher threshold to avoid noise)
+
         kw2, sc2 = best_fuzzy_match(text_norm, allow_positive_keywords_norm)
         if kw2 and sc2 >= allow_kw_threshold:
             return "vendor", {
@@ -261,17 +263,15 @@ def main() -> None:
     ap.add_argument("--output-file", type=Path, default=OUTPUT_FILE)
 
     ap.add_argument("--allow-names", type=Path, default=DEFAULT_ALLOW_NAMES)
-    ap.add_argument("--allow-keywords", type=Path, default=DEFAULT_ALLOW_KEYWORDS)  # <-- NEW
+    ap.add_argument("--allow-keywords", type=Path, default=DEFAULT_ALLOW_KEYWORDS)
     ap.add_argument("--allow-domains", type=Path, default=DEFAULT_ALLOW_DOMAINS)
+
     ap.add_argument("--deny-domains", type=Path, default=DEFAULT_DENY_DOMAINS)
     ap.add_argument("--deny-names", type=Path, default=DEFAULT_DENY_NAMES)
 
-    ap.add_argument("--allow-threshold", type=float, default=88.0,
-                    help="Fuzzy threshold for vendor-name allowlist. Recommended 80-90. Default 88.")
-    ap.add_argument("--allow-keyword-threshold", type=float, default=92.0,
-                    help="Fuzzy threshold for strict positive keywords. Default 92 (stricter).")
-    ap.add_argument("--deny-threshold", type=float, default=90.0,
-                    help="Fuzzy threshold for deny-name keywords. Default 90 (stricter to avoid false positives).")
+    ap.add_argument("--allow-threshold", type=float, default=88.0)
+    ap.add_argument("--allow-keyword-threshold", type=float, default=92.0)
+    ap.add_argument("--deny-threshold", type=float, default=90.0)
 
     args = ap.parse_args()
 
@@ -282,14 +282,16 @@ def main() -> None:
     allow_positive_keywords = sorted({normalize_text(x) for x in load_list(args.allow_keywords) if x.strip()})
     deny_names = sorted({normalize_text(x) for x in load_list(args.deny_names) if x.strip()})
 
-    # 1️⃣ Load Step2b labels
+    # Load Step2b labels
     label_by_email_id: dict[str, str] = {}
+
     with args.state_file.open("r", encoding="utf-8") as f:
         for line in f:
             try:
                 rec = json.loads(line)
             except Exception:
                 continue
+
             eid = rec.get("email_id")
             label = rec.get("predicted_label")
             if eid and label in ("vendor", "non_vendor"):
@@ -299,10 +301,9 @@ def main() -> None:
     print(f"ALLOW vendor_names={len(allow_vendor_names)}  ALLOW keywords={len(allow_positive_keywords)}  ALLOW domains={len(allow_domains)}")
     print(f"DENY  names={len(deny_names)}  DENY  domains={len(deny_domains)}")
     if not _HAS_RAPIDFUZZ:
-        print("WARNING: rapidfuzz not installed; using difflib fallback (slower/less accurate). "
-              "Install: pip install rapidfuzz")
+        print("WARNING: rapidfuzz not installed; using difflib fallback.")
 
-    # 2️⃣ Build training file
+    # Build training file
     args.output_file.parent.mkdir(parents=True, exist_ok=True)
 
     written = 0
@@ -346,9 +347,8 @@ def main() -> None:
                 "email_id": eid,
                 "text": text,
                 "predicted_label": predicted2,
-                "rule_override": rule_meta,  # explains if/why it changed
-                # 👇 ONLY FIELD HUMANS MAY EDIT
-                "final_label": predicted2,
+                "rule_override": rule_meta,
+                "final_label": predicted2,  # ONLY FIELD HUMANS MAY EDIT
             }
 
             out.write(json.dumps(record, ensure_ascii=False) + "\n")
