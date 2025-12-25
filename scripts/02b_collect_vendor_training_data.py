@@ -183,11 +183,21 @@ EMAIL_RE = re.compile(r"([a-z0-9._%+\\-]+)@([a-z0-9.\\-]+\\.[a-z]{2,})", re.I)
 
 def extract_sender_domain(email_obj: Dict[str, Any]) -> Optional[str]:
     headers = email_obj.get("headers", {}) or {}
-    from_addr = str(headers.get("from", "") or headers.get("From", "") or "")
+
+    # Prefer From:
+    from_addr = str(headers.get("from") or headers.get("From") or "")
     m = EMAIL_RE.search(from_addr)
-    if not m:
-        return None
-    return normalize_domain(m.group(2))
+    if m:
+        return normalize_domain(m.group(2))
+
+    # Fallback: Return-Path (often used by bulk senders)
+    rp = str(headers.get("return-path") or headers.get("Return-Path") or "")
+    m = EMAIL_RE.search(rp)
+    if m:
+        return normalize_domain(m.group(2))
+
+    return None
+
 
 
 def domain_matches(sender_domain: str, listed_domain: str) -> bool:
