@@ -179,7 +179,8 @@ def load_list(path: Path) -> list[str]:
     return items
 
 
-EMAIL_RE = re.compile(r"([a-z0-9._%+\\-]+)@([a-z0-9.\\-]+\\.[a-z]{2,})", re.I)
+EMAIL_RE = re.compile(r"([a-z0-9._%+\-]+)@([a-z0-9.\-]+\.[a-z]{2,})", re.I)
+
 
 def extract_sender_domain(email_obj: Dict[str, Any]) -> Optional[str]:
     headers = email_obj.get("headers", {}) or {}
