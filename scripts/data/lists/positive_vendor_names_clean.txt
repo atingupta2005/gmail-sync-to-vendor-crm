@@ -86,3 +86,5 @@ Innoserv
 Techademy
 iamneo.ai
 NTT Data Business Solutions
+software poets
+DAP Consultancy Service
