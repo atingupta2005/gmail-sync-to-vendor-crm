@@ -10,7 +10,6 @@ cloud communications
 cloudthat
 cognixia
 corporate networks
-direct
 dmr tech pvt ltd
 edoxi
 edureka
