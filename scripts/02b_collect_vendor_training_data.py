@@ -426,6 +426,8 @@ def main() -> None:
     print(f"Skipped : {skipped}")
     print(f"Output  : {args.output_file.resolve()}")
     print("========================================")
+    print("DEBUG deny_domains_loaded:", len(deny_domains))
+    print("DEBUG has_sbi_co_in:", "sbi.co.in" in deny_domains)
 
 
 if __name__ == "__main__":
