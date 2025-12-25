@@ -52,3 +52,38 @@ unext
 vastpro
 vinsys
 virtueevarsity
+iSkillBox
+TrainingBasket
+Edutech Suvidha
+Probits
+18.hconsulting
+ThinkWright
+Learning Cubes
+PeopleDecode
+RJP Infotek
+Gisul
+Florence Fennel
+Networkers CCIE
+GTT Connect
+Springpeople
+InfosecTrain
+Stalwart Learning
+JKDTL
+KGroup
+TSE (Team TSE)
+Pioneer Business Solutions
+Mindspeed Solutions
+EnlinkIT
+Eduramp
+Edforce
+iFuture Technologies
+Mazenet Solution
+Synergetics
+LearnQuest
+Koenig Solutions
+Virtue eVarsity
+Xtransmatrix
+Innoserv
+Techademy
+iamneo.ai
+NTT Data Business Solutions
