@@ -4,21 +4,24 @@ python3 -m pip install -U rapidfuzz
 # 1) (Optional) sanity checks
 ls -lah data/emails_prefiltered | head
 ls -lah data/state_excl/step2b_vendor_scoring.jsonl
-ls -lah data/lists/ 2>/dev/null || echo "NOTE: data/lists/ doesn't exist yet"
+
+rm -rf data/state_excl
+mkdir -p data/state_excl
 
 # 2) Run training-data collector (UPDATED script is in scripts/)
 python3 scripts/02b_collect_vendor_training_data.py \
   --email-dir data/emails_prefiltered \
-  --state-file data/state_excl/step2b_vendor_scoring.jsonl \
+  --state-file data/state/step2b_vendor_scoring.jsonl \
   --output-file data/vendor_training_review.jsonl \
-  --allow-names data/lists/positive_vendor_names_clean.txt \
-  --allow-keywords data/lists/positive_keywords_clean.txt \
-  --allow-domains data/lists/positive_vendor_domains_clean.txt \
-  --deny-domains data/lists/deny_domains_clean.txt \
-  --deny-names data/lists/deny_names_clean_final.txt \
+  --allow-names scripts/data/lists/positive_vendor_names_clean.txt \
+  --allow-keywords scripts/data/lists/positive_keywords_clean.txt \
+  --allow-domains scripts/data/lists/positive_vendor_domains_clean.txt \
+  --deny-domains scripts/data/lists/deny_domains_clean.txt \
+  --deny-names scripts/data/lists/deny_names_clean.txt \
   --allow-threshold 88 \
   --allow-keyword-threshold 92 \
   --deny-threshold 90
+
 
 # 3) Verify output
 wc -l data/vendor_training_review.jsonl
@@ -47,5 +50,4 @@ python3 scripts/02b_collect_vendor_training_data.py \
   --deny-domains data/lists/deny_domains_clean.txt \
   --deny-names data/lists/deny_names_clean_final.txt \
   --allow-threshold 88 \
-  --allow-keyword-threshold 92 \
   --deny-threshold 90

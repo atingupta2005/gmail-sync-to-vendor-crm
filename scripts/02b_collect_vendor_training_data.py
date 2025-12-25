@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 EMAIL_DIR = Path("data/emails_prefiltered")
-STATE_FILE = Path("data/state_excl/step2b_vendor_scoring.jsonl")
+STATE_FILE = Path("data/state/step2b_vendor_scoring.jsonl")
 OUTPUT_FILE = Path("data/vendor_training_review.jsonl")
 
 DEFAULT_ALLOW_NAMES = Path("data/lists/positive_vendor_names_clean.txt")
@@ -49,11 +49,12 @@ DEFAULT_DENY_NAMES = Path("data/lists/deny_names_clean_final.txt")
 # Optional fast fuzzy match
 # -------------------------
 try:
-    from rapidfuzz import fuzz  # type: ignore
+    from rapidfuzz import fuzz, process  # type: ignore
     _HAS_RAPIDFUZZ = True
 except Exception:
     _HAS_RAPIDFUZZ = False
     from difflib import SequenceMatcher
+
 
 
 # -------------------------
@@ -106,6 +107,7 @@ def normalize_domain(d: str) -> str:
 
 def load_list(path: Path) -> list[str]:
     if not path or not path.exists():
+        print(f"WARNING: list file not found: {path}")
         return []
     items: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -149,6 +151,18 @@ def fuzzy_score(keyword: str, text: str) -> float:
 
 
 def best_fuzzy_match(text_norm: str, keywords_norm: list[str]) -> Tuple[Optional[str], float]:
+    if not text_norm or not keywords_norm:
+        return None, 0.0
+
+    if _HAS_RAPIDFUZZ:
+        # much faster than looping in Python
+        res = process.extractOne(text_norm, keywords_norm, scorer=fuzz.partial_ratio)
+        if not res:
+            return None, 0.0
+        kw, score, _ = res
+        return kw, float(score)
+
+    # difflib fallback
     best_kw: Optional[str] = None
     best_score: float = 0.0
     for kw in keywords_norm:
@@ -156,6 +170,7 @@ def best_fuzzy_match(text_norm: str, keywords_norm: list[str]) -> Tuple[Optional
         if sc > best_score:
             best_kw, best_score = kw, sc
     return best_kw, best_score
+
 
 
 def strict_keyword_hit(text_norm: str, keywords_norm: list[str]) -> Optional[str]:
@@ -176,7 +191,6 @@ def apply_rules(
     allow_positive_keywords_norm: list[str],
     deny_keywords_norm: list[str],
     allow_threshold: float,
-    allow_kw_threshold: float,
     deny_threshold: float
 ) -> Tuple[str, Optional[dict]]:
     """
@@ -189,7 +203,8 @@ def apply_rules(
     6) fallback predicted
     """
     sender_dom = extract_sender_domain(email_obj)
-    text_norm = normalize_text(text)
+    text_norm = normalize_text(text)[:2500]  # cap to speed up fuzzy matching
+
 
     # 1) ALLOW by domain
     if sender_dom:
@@ -201,7 +216,16 @@ def apply_rules(
                     "matched_domain": normalize_domain(d),
                 }
 
-    # 2) ALLOW by fuzzy vendor-name keyword
+    # 2) ALLOW by strict positive keywords
+    if allow_positive_keywords_norm:
+        hit = strict_keyword_hit(text_norm, allow_positive_keywords_norm)
+        if hit:
+            return "vendor", {
+                "rule": "allow_strict_keyword_substring",
+                "matched_keyword": hit,
+            }
+
+    # 3) ALLOW by fuzzy vendor-name keyword
     if allow_vendor_names_norm:
         kw, sc = best_fuzzy_match(text_norm, allow_vendor_names_norm)
         if kw and sc >= allow_threshold:
@@ -211,22 +235,6 @@ def apply_rules(
                 "score": sc,
             }
 
-    # 3) ALLOW by strict positive keywords
-    if allow_positive_keywords_norm:
-        hit = strict_keyword_hit(text_norm, allow_positive_keywords_norm)
-        if hit:
-            return "vendor", {
-                "rule": "allow_strict_keyword_substring",
-                "matched_keyword": hit,
-            }
-
-        kw2, sc2 = best_fuzzy_match(text_norm, allow_positive_keywords_norm)
-        if kw2 and sc2 >= allow_kw_threshold:
-            return "vendor", {
-                "rule": "allow_strict_keyword_fuzzy",
-                "matched_keyword": kw2,
-                "score": sc2,
-            }
 
     # 4) DENY by domain
     if sender_dom:
@@ -239,7 +247,7 @@ def apply_rules(
                 }
 
     # 5) DENY by fuzzy keyword
-    if deny_keywords_norm:
+    if deny_keywords_norm and ("unsubscribe" in text_norm or "newsletter" in text_norm or "career" in text_norm):
         kw3, sc3 = best_fuzzy_match(text_norm, deny_keywords_norm)
         if kw3 and sc3 >= deny_threshold:
             return "non_vendor", {
@@ -270,7 +278,6 @@ def main() -> None:
     ap.add_argument("--deny-names", type=Path, default=DEFAULT_DENY_NAMES)
 
     ap.add_argument("--allow-threshold", type=float, default=88.0)
-    ap.add_argument("--allow-keyword-threshold", type=float, default=92.0)
     ap.add_argument("--deny-threshold", type=float, default=90.0)
 
     args = ap.parse_args()
@@ -339,9 +346,9 @@ def main() -> None:
                 allow_positive_keywords_norm=allow_positive_keywords,
                 deny_keywords_norm=deny_names,
                 allow_threshold=args.allow_threshold,
-                allow_kw_threshold=args.allow_keyword_threshold,
                 deny_threshold=args.deny_threshold,
             )
+
 
             record = {
                 "email_id": eid,
