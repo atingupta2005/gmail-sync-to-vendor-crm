@@ -188,55 +188,22 @@ def apply_rules(
     allow_domains: list[str],
     deny_domains: list[str],
     allow_vendor_names_norm: list[str],
-    allow_positive_keywords_norm: list[str],
     deny_keywords_norm: list[str],
     allow_threshold: float,
     deny_threshold: float
 ) -> Tuple[str, Optional[dict]]:
-    """
-    Precedence:
-    1) allow domain
-    2) allow fuzzy vendor-name keyword
-    3) allow strict positive keyword (substring OR fuzzy)
-    4) deny domain
-    5) deny fuzzy keyword
-    6) fallback predicted
-    """
+
     sender_dom = extract_sender_domain(email_obj)
-    text_norm = normalize_text(text)[:2500]  # cap to speed up fuzzy matching
 
+    # Use a short candidate for fuzzy (reduces random matches in footers)
+    headers = email_obj.get("headers", {}) or {}
+    subject = str(headers.get("subject", "") or headers.get("Subject", "")).strip()
+    from_addr = str(headers.get("from", "") or headers.get("From", "")).strip()
+    body = (email_obj.get("body", {}) or {}).get("raw_text", "") or ""
+    candidate = f"{subject}\n{from_addr}\n{body[:500]}"
+    text_norm = normalize_text(candidate)
 
-    # 1) ALLOW by domain
-    if sender_dom:
-        for d in allow_domains:
-            if domain_matches(sender_dom, d):
-                return "vendor", {
-                    "rule": "allow_domain",
-                    "sender_domain": sender_dom,
-                    "matched_domain": normalize_domain(d),
-                }
-
-    # 2) ALLOW by strict positive keywords
-    if allow_positive_keywords_norm:
-        hit = strict_keyword_hit(text_norm, allow_positive_keywords_norm)
-        if hit:
-            return "vendor", {
-                "rule": "allow_strict_keyword_substring",
-                "matched_keyword": hit,
-            }
-
-    # 3) ALLOW by fuzzy vendor-name keyword
-    if allow_vendor_names_norm:
-        kw, sc = best_fuzzy_match(text_norm, allow_vendor_names_norm)
-        if kw and sc >= allow_threshold:
-            return "vendor", {
-                "rule": "allow_fuzzy_vendor_name",
-                "matched_keyword": kw,
-                "score": sc,
-            }
-
-
-    # 4) DENY by domain
+    # 1) DENY by domain (PRIORITY)
     if sender_dom:
         for d in deny_domains:
             if domain_matches(sender_dom, d):
@@ -246,19 +213,38 @@ def apply_rules(
                     "matched_domain": normalize_domain(d),
                 }
 
-    # 5) DENY by fuzzy keyword
-    if deny_keywords_norm and ("unsubscribe" in text_norm or "newsletter" in text_norm or "career" in text_norm):
-        kw3, sc3 = best_fuzzy_match(text_norm, deny_keywords_norm)
-        if kw3 and sc3 >= deny_threshold:
+    # 2) DENY by fuzzy deny-name (PRIORITY)
+    if deny_keywords_norm:
+        kw, sc = best_fuzzy_match(text_norm, deny_keywords_norm)
+        if kw and sc >= deny_threshold:
             return "non_vendor", {
                 "rule": "deny_fuzzy_keyword",
-                "matched_keyword": kw3,
-                "score": sc3,
+                "matched_keyword": kw,
+                "score": sc,
             }
 
-    # 6) fallback
-    return predicted_label, None
+    # 3) ALLOW by domain
+    if sender_dom:
+        for d in allow_domains:
+            if domain_matches(sender_dom, d):
+                return "vendor", {
+                    "rule": "allow_domain",
+                    "sender_domain": sender_dom,
+                    "matched_domain": normalize_domain(d),
+                }
 
+    # 4) ALLOW by fuzzy vendor-name
+    if allow_vendor_names_norm:
+        kw, sc = best_fuzzy_match(text_norm, allow_vendor_names_norm)
+        if kw and sc >= allow_threshold:
+            return "vendor", {
+                "rule": "allow_fuzzy_vendor_name",
+                "matched_keyword": kw,
+                "score": sc,
+            }
+
+    # 5) fallback
+    return predicted_label, None
 
 # -------------------------
 # Main
@@ -271,7 +257,6 @@ def main() -> None:
     ap.add_argument("--output-file", type=Path, default=OUTPUT_FILE)
 
     ap.add_argument("--allow-names", type=Path, default=DEFAULT_ALLOW_NAMES)
-    ap.add_argument("--allow-keywords", type=Path, default=DEFAULT_ALLOW_KEYWORDS)
     ap.add_argument("--allow-domains", type=Path, default=DEFAULT_ALLOW_DOMAINS)
 
     ap.add_argument("--deny-domains", type=Path, default=DEFAULT_DENY_DOMAINS)
@@ -286,7 +271,6 @@ def main() -> None:
     deny_domains = sorted({normalize_domain(x) for x in load_list(args.deny_domains) if x.strip()})
 
     allow_vendor_names = sorted({normalize_text(x) for x in load_list(args.allow_names) if x.strip()})
-    allow_positive_keywords = sorted({normalize_text(x) for x in load_list(args.allow_keywords) if x.strip()})
     deny_names = sorted({normalize_text(x) for x in load_list(args.deny_names) if x.strip()})
 
     # Load Step2b labels
@@ -343,11 +327,11 @@ def main() -> None:
                 allow_domains=allow_domains,
                 deny_domains=deny_domains,
                 allow_vendor_names_norm=allow_vendor_names,
-                allow_positive_keywords_norm=allow_positive_keywords,
                 deny_keywords_norm=deny_names,
                 allow_threshold=args.allow_threshold,
                 deny_threshold=args.deny_threshold,
             )
+
 
 
             record = {

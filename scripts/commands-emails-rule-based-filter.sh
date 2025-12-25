@@ -18,9 +18,9 @@ python3 scripts/02b_collect_vendor_training_data.py \
   --allow-domains scripts/data/lists/positive_vendor_domains_clean.txt \
   --deny-domains scripts/data/lists/deny_domains_clean.txt \
   --deny-names scripts/data/lists/deny_names_clean.txt \
-  --allow-threshold 88 \
+  --allow-threshold 93 \
   --allow-keyword-threshold 92 \
-  --deny-threshold 90
+  --deny-threshold 88
 
 
 # 3) Verify output
