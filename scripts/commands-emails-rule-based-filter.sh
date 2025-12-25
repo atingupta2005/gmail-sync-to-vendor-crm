@@ -8,6 +8,8 @@ ls -lah data/state_excl/step2b_vendor_scoring.jsonl
 rm -rf data/state_excl
 mkdir -p data/state_excl
 
+rm -f data/vendor_training_review.jsonl
+
 # 2) Run training-data collector (UPDATED script is in scripts/)
 python3 scripts/02b_collect_vendor_training_data.py \
   --email-dir data/emails_prefiltered \

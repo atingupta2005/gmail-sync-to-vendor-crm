@@ -61,6 +61,67 @@ except Exception:
 # Helpers
 # -------------------------
 
+# --- Thread stripping (Gmail) ---
+_FORWARD_MARKER_RE = re.compile(r"(?im)^[-]{5,}\s*forwarded message\s*[-]{5,}\s*$")
+_ON_WROTE_RE = re.compile(r"(?im)^\s*on .+wrote:\s*$")
+_ORIGINAL_MSG_RE = re.compile(r"(?im)^\s*-{2,}\s*original message\s*-{2,}\s*$")
+_SIG_RE = re.compile(r"(?m)^\s*--\s*$")
+
+def top_message_only(text: str, max_chars: int = 20000) -> str:
+    """
+    Keep only the newest/top message and remove quoted thread + signature.
+    Designed for Gmail-style threads, with safe fallbacks.
+    """
+    if not text:
+        return ""
+
+    t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    t = t[:max_chars]
+
+    # 1) Find earliest thread boundary marker
+    cut_positions = []
+
+    m = _FORWARD_MARKER_RE.search(t)
+    if m:
+        cut_positions.append(m.start())
+
+    m = _ON_WROTE_RE.search(t)
+    if m:
+        cut_positions.append(m.start())
+
+    m = _ORIGINAL_MSG_RE.search(t)
+    if m:
+        cut_positions.append(m.start())
+
+    # 2) Detect Outlook-ish header block inside forward/reply (From/Date/To/Subject/Cc)
+    # Cut at the first "From:" line if the next few lines contain To: and Subject:
+    lines = t.split("\n")
+    scan_limit = min(len(lines), 200)  # only scan top region
+    for i in range(scan_limit):
+        if lines[i].strip().lower().startswith("from:"):
+            window = "\n".join(lines[i:i+12]).lower()
+            if "to:" in window and "subject:" in window:
+                # find absolute char position of this line start
+                pos = sum(len(lines[j]) + 1 for j in range(i))
+                cut_positions.append(pos)
+                break
+
+    if cut_positions:
+        t = t[:min(cut_positions)].strip()
+
+    # 3) Strip signature if delimiter exists near the bottom
+    sig = _SIG_RE.search(t)
+    if sig:
+        # only cut if signature marker is in last 40% to avoid killing content
+        if sig.start() > int(len(t) * 0.6):
+            t = t[:sig.start()].strip()
+
+    # 4) Final cleanup
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    return t
+
+
+
 def strip_html(html: str) -> str:
     text = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", html)
     text = re.sub(r"(?is)<[^>]+>", " ", text)
@@ -199,8 +260,11 @@ def apply_rules(
     headers = email_obj.get("headers", {}) or {}
     subject = str(headers.get("subject", "") or headers.get("Subject", "")).strip()
     from_addr = str(headers.get("from", "") or headers.get("From", "")).strip()
-    body = (email_obj.get("body", {}) or {}).get("raw_text", "") or ""
-    candidate = f"{subject}\n{from_addr}\n{body[:500]}"
+
+    body_full = (email_obj.get("body", {}) or {}).get("raw_text", "") or ""
+    body_top = top_message_only(body_full)  # <-- strips old thread/forwards/signature
+
+    candidate = f"{subject}\n{from_addr}\n{body_top[:500]}"
     text_norm = normalize_text(candidate)
 
     # 1) DENY by domain (PRIORITY)
