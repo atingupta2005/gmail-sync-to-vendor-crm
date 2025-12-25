@@ -51,3 +51,6 @@ eBay
 superstars
 holdings
 alphaalerts
+SEBI
+Investor
+Trades

@@ -20,7 +20,6 @@ python3 scripts/02b_collect_vendor_training_data.py \
   --allow-threshold 93 \
   --deny-threshold 88
 
-
 # 3) Verify output
 wc -l data/vendor_training_review.jsonl
 head -n 3 data/vendor_training_review.jsonl
